@@ -1,0 +1,274 @@
+// 本站索引（AniPick 后端）与 Bangumi 直连 API 的类型。
+
+export const TYPE_LABEL: Record<number, string> = {
+  1: '书籍',
+  2: '动画',
+  3: '音乐',
+  4: '游戏',
+  6: '三次元',
+}
+
+export const TYPE_ORDER = [2, 1, 4, 3, 6]
+
+export interface TagVote {
+  name: string
+  votes: number
+  pct: number
+}
+
+export interface Subject {
+  id: number
+  type: number
+  name: string
+  name_cn: string
+  date: string
+  platform: string
+  rank: number
+  score: number
+  rating_total: number
+  wish: number
+  collect: number
+  doing: number
+  on_hold: number
+  dropped: number
+  nsfw: boolean
+  meta_tags: string[]
+  image: string
+  tags_total: number
+  locked: boolean
+  fetched_at: string
+  tags?: TagVote[]
+}
+
+export interface SearchResult {
+  items: Subject[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface TagStat {
+  name: string
+  count: number
+  votes: number
+}
+
+export interface Stats {
+  total: number
+  by_type: Record<string, number>
+  tags: number
+  subject_tags: number
+  last_fetched: string | null
+  nsfw: number
+  db_size: number
+}
+
+export interface CrawlProgress {
+  phase: string
+  type: number
+  offset: number
+  total: number
+  pages: number
+  requests: number
+  inserted: number
+  updated: number
+  refreshed: number
+  errors: number
+  skipped: number
+  pruned: number
+  message: string
+  updated_at: string
+}
+
+export interface CrawlState {
+  running: boolean
+  run_id: number
+  mode: string
+  trigger: string
+  started_at: string
+  progress: CrawlProgress
+}
+
+export interface Run {
+  id: number
+  mode: string
+  trigger: string
+  status: string
+  types: number[]
+  stats: CrawlProgress | Record<string, unknown>
+  error: string
+  started_at: string
+  finished_at: string | null
+}
+
+export interface CrawlSettings {
+  types: number[]
+  page_size: number
+  delay_ms: number
+  request_timeout_sec: number
+  refresh_ttl_days: number
+  refresh_batch: number
+  incremental_pages: number
+  incremental_interval_min: number
+  auto_incremental: boolean
+  auto_refresh: boolean
+  prune_on_full: boolean
+}
+
+export interface AdminSettings {
+  crawl: CrawlSettings
+  bgm: {
+    token: string
+    cookie: string
+    ua: string
+    token_configured: boolean
+    cookie_configured: boolean
+  }
+  updated_at: string
+}
+
+export interface AdminOverview {
+  stats: Stats
+  crawler: CrawlState
+  runs: Run[]
+  stale: number
+  settings: {
+    crawl: CrawlSettings
+    bgm: { token_configured: boolean; cookie_configured: boolean }
+  }
+}
+
+export interface MetaResponse {
+  name: string
+  version: string
+  stats: Stats
+  crawler: CrawlState
+}
+
+// 服务端抓取出口的诊断信息（仅管理员可见）。
+export interface NetworkStatus {
+  doh: boolean
+  proxy: boolean
+  upstream_ok?: boolean
+  upstream_status?: number
+  upstream_error?: string
+  diagnostics?: {
+    host: string
+    doh_enabled: boolean
+    endpoints: string[]
+    addresses: string[]
+    error?: string
+  }
+}
+
+// ---------- Bangumi 直连 ----------
+
+export interface BgmImages {
+  large?: string
+  common?: string
+  medium?: string
+  small?: string
+  grid?: string
+}
+
+export interface BgmRating {
+  rank: number
+  total: number
+  score: number
+  count: Record<string, number>
+}
+
+export interface BgmCollection {
+  wish: number
+  collect: number
+  doing: number
+  on_hold: number
+  dropped: number
+}
+
+export interface BgmTag {
+  name: string
+  count: number
+  total_count: number
+}
+
+export interface BgmInfoboxItem {
+  key: string
+  value: string | Array<string | { k?: string; v?: string }>
+}
+
+export interface BgmSubject {
+  id: number
+  type: number
+  name: string
+  name_cn: string
+  date?: string | null
+  platform?: string
+  summary?: string
+  images?: BgmImages
+  image?: string
+  nsfw?: boolean
+  locked?: boolean
+  meta_tags?: string[]
+  tags?: BgmTag[]
+  rating?: BgmRating
+  collection?: BgmCollection
+  infobox?: BgmInfoboxItem[]
+  total_episodes?: number
+  eps?: number
+  volumes?: number
+  series?: boolean
+}
+
+export interface BgmCharacter {
+  id: number
+  name: string
+  type: number
+  relation: string
+  images?: BgmImages
+  actors?: { id: number; name: string; type: number; images?: BgmImages }[]
+}
+
+export interface BgmPerson {
+  id: number
+  name: string
+  type: number
+  relation: string
+  career?: string[]
+  images?: BgmImages
+}
+
+export interface BgmRelation {
+  id: number
+  type: number
+  name: string
+  name_cn: string
+  relation: string
+  images?: BgmImages
+  date?: string
+}
+
+export interface BgmEpisode {
+  id: number
+  type: number
+  name: string
+  name_cn: string
+  sort: number
+  ep?: number
+  airdate?: string
+  comment?: number
+  duration?: string
+}
+
+export interface BgmEpisodeList {
+  data: BgmEpisode[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface BgmUser {
+  id: number
+  username: string
+  nickname: string
+}
