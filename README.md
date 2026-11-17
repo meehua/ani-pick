@@ -253,6 +253,8 @@ docker compose up -d
 | `ANIPICK_DOH` / `ANIPICK_ECH` | `true` | 服务端抓取的 DoH / ECH（与前台无关） |
 | `ANIPICK_DOH_ENDPOINTS` | `https://dns.alidns.com/resolve,https://1.1.1.1/dns-query` | DoH 入口（国内优先 AliDNS） |
 | `ANIPICK_EGRESS_PROXY` | — | **仅服务端抓取**的出站代理（http/https/socks5）；用户请求永不经过服务端 |
+| `ANIPICK_CLIENT_IP_HEADER` | — | 客户端真实 IP 请求头（如 Cloudflare 的 `CF-Connecting-IP`）；仅当 TCP 对端属于 `ANIPICK_TRUSTED_PROXY_CIDRS` 时才采信，防止伪造头绕过限流 |
+| `ANIPICK_TRUSTED_PROXY_CIDRS` | — | 可信反代网段（逗号分隔 CIDR，Cloudflare 见 [cloudflare.com/ips](https://www.cloudflare.com/ips/)）；与 `ANIPICK_CLIENT_IP_HEADER` 配套使用 |
 | `ANIPICK_CRAWL_TYPES` | `1,2,3,4,6` | 抓取类型 |
 | `ANIPICK_CRAWL_PAGE_SIZE` | `100` | 每页条数（10–100） |
 | `ANIPICK_CRAWL_DELAY_MS` | `350` | 请求间隔 |
@@ -351,7 +353,7 @@ cd frontend && node probe.mjs # 侧栏复杂控件探针
 
 本站按**公开站点**运营，请注意：
 
-1. **管理员入口**：首次登录后修改密码；用反向代理 / IP 白名单限制 `/admin` 与 `/api/admin/*`；不要使用默认密码。
+1. **管理员入口**：页面不暴露任何管理入口链接（直接访问 `/admin`）；首次登录后修改密码；用反向代理 / IP 白名单限制 `/admin` 与 `/api/admin/*`；不要使用默认密码。经 Cloudflare 等反代暴露时，配置 `ANIPICK_CLIENT_IP_HEADER` + `ANIPICK_TRUSTED_PROXY_CIDRS`（如 `CF-Connecting-IP` + Cloudflare 网段），让限流按真实访客 IP 计数且不可伪造。
 2. **数据范围**：本站索引只保存检索所需的条目事实字段（ID、名称、日期、排名、评分、标签与占比），不存储简介、剧集、角色等完整内容；这些由访客浏览器实时从 Bangumi 获取。
 3. **图片**：直接由访客浏览器从 Bangumi 图床加载，不经本站转发；页面设置 `referrerpolicy="no-referrer"`。
 4. **版权与条款**：条目与图片版权归 Bangumi 及原作者；请遵守 Bangumi 的 API 使用条款，保持可描述的 User-Agent 与合理抓取频率。

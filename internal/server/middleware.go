@@ -91,12 +91,44 @@ func newLimiter() *limiter {
 	return &limiter{entries: map[string]*bucket{}}
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+// clientIP 返回请求来源 IP。配置了 clientIPHeader（如经 Cloudflare/反代暴露时
+// 取 CF-Connecting-IP）且 TCP 对端在可信网段内时优先使用；否则回退 TCP 对端地址。
+// 教训（源自 Morikusa 06-security）：XFF 类头可被伪造绕过限流，只有连接来自
+// 可信反代网段才读头；未配置可信网段时对头完全不信。
+func (s *Server) clientIP(r *http.Request) string {
+	remote := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
 	}
-	return host
+	if s.clientIPHeader != "" && s.trustedProxy(remote) {
+		if v := r.Header.Get(s.clientIPHeader); v != "" {
+			// 兼容 X-Forwarded-For 这类逗号列表头，取第一个（最接近客户端的）
+			if i := strings.IndexByte(v, ','); i >= 0 {
+				v = v[:i]
+			}
+			if v = strings.TrimSpace(v); v != "" {
+				return v
+			}
+		}
+	}
+	return remote
+}
+
+// trustedProxy 判断 TCP 对端是否属于配置的可信反代网段。
+func (s *Server) trustedProxy(remote string) bool {
+	if len(s.trustedCIDRs) == 0 {
+		return false
+	}
+	ip := net.ParseIP(remote)
+	if ip == nil {
+		return false
+	}
+	for _, c := range s.trustedCIDRs {
+		if c.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *limiter) allow(key string, rate, burst float64) bool {
@@ -134,7 +166,7 @@ func (s *Server) generalLimit(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !s.limits.allow(clientIP(r), 30, 120) {
+		if !s.limits.allow(s.clientIP(r), 30, 120) {
 			fail(w, http.StatusTooManyRequests, "rate_limited", "请求过于频繁，请稍后再试", "")
 			return
 		}

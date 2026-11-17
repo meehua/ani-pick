@@ -3,6 +3,7 @@ package server
 import (
 	"embed"
 	"io/fs"
+	"net"
 	"net/http"
 	"path"
 	"strings"
@@ -26,9 +27,11 @@ type Server struct {
 	limits   *limiter
 	version  string
 
-	httpClient  *http.Client
-	resolver    *netx.Resolver
-	egressProxy bool
+	httpClient     *http.Client
+	resolver       *netx.Resolver
+	egressProxy    bool
+	clientIPHeader string
+	trustedCIDRs   []*net.IPNet
 
 	cacheMu  sync.Mutex
 	metaTags map[string]cachedMetaTags
@@ -49,10 +52,12 @@ type cachedJSON struct {
 
 // Options 是服务层的可选依赖（网络通道等）。
 type Options struct {
-	HTTPClient  *http.Client
-	Resolver    *netx.Resolver
-	EgressProxy bool
-	Version     string
+	HTTPClient        *http.Client
+	Resolver          *netx.Resolver
+	EgressProxy       bool
+	Version           string
+	ClientIPHeader    string
+	TrustedProxyCIDRs []*net.IPNet
 }
 
 func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts Options) (*Server, error) {
@@ -65,17 +70,19 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 		ver = "dev"
 	}
 	return &Server{
-		store:       st,
-		crawler:     cw,
-		defaults:    defaults,
-		static:      sub,
-		limits:      newLimiter(),
-		version:     ver,
-		httpClient:  opts.HTTPClient,
-		resolver:    opts.Resolver,
-		egressProxy: opts.EgressProxy,
-		metaTags:    map[string]cachedMetaTags{},
-		m:           newMetrics(),
+		store:          st,
+		crawler:        cw,
+		defaults:       defaults,
+		static:         sub,
+		limits:         newLimiter(),
+		version:        ver,
+		httpClient:     opts.HTTPClient,
+		resolver:       opts.Resolver,
+		egressProxy:    opts.EgressProxy,
+		metaTags:       map[string]cachedMetaTags{},
+		clientIPHeader: strings.TrimSpace(opts.ClientIPHeader),
+		trustedCIDRs:   opts.TrustedProxyCIDRs,
+		m:              newMetrics(),
 	}, nil
 }
 

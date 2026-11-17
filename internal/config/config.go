@@ -23,6 +23,12 @@ type Config struct {
 	Net           Net
 	EnvFile       string
 	Debug         bool
+	// ClientIPHeader 是客户端真实 IP 的请求头名（如 CF-Connecting-IP），
+	// 站点经 Cloudflare/反代暴露时配置；仅当 TCP 对端来自 TrustedProxyCIDRs 时才读头。
+	ClientIPHeader string
+	// TrustedProxyCIDRs 是可信反代的网段列表（逗号分隔 CIDR）；
+	// 只有对端在此列表内才采信 ClientIPHeader，防止伪造头绕过限流。
+	TrustedProxyCIDRs string
 }
 
 // Net 控制服务端出站网络（仅抓取使用）：DoH 解析与 ECH。
@@ -135,6 +141,9 @@ func Load() (Config, error) {
 	if v := env("ANIPICK_DOH_ENDPOINTS", ""); v != "" {
 		c.Net.DoHEndpoints = splitList(v)
 	}
+
+	c.ClientIPHeader = env("ANIPICK_CLIENT_IP_HEADER", c.ClientIPHeader)
+	c.TrustedProxyCIDRs = env("ANIPICK_TRUSTED_PROXY_CIDRS", c.TrustedProxyCIDRs)
 
 	return c, nil
 }

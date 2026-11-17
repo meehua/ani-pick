@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -114,12 +116,33 @@ func main() {
 		slog.Info("DoH 已启用", "endpoints", cfg.Net.DoHEndpoints, "ech", cfg.Net.ECH)
 	}
 
+	// 可信反代网段：只有对端在此列表内才采信真实 IP 头（防伪造绕过限流）
+	var trustedCIDRs []*net.IPNet
+	for _, part := range strings.Split(cfg.TrustedProxyCIDRs, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		_, cidr, perr := net.ParseCIDR(part)
+		if perr != nil {
+			slog.Error("ANIPICK_TRUSTED_PROXY_CIDRS 无效", "cidr", part, "err", perr)
+			os.Exit(1)
+		}
+		trustedCIDRs = append(trustedCIDRs, cidr)
+	}
+	if cfg.ClientIPHeader != "" && len(trustedCIDRs) == 0 {
+		slog.Warn("已配置 ANIPICK_CLIENT_IP_HEADER 但未配置可信网段，真实 IP 头不会被采信；" +
+			"请同时设置 ANIPICK_TRUSTED_PROXY_CIDRS（如 Cloudflare 网段）")
+	}
+
 	cw := crawler.New(st, defaults, netHTTP)
 	srv, err := server.New(st, cw, defaults, server.Options{
-		HTTPClient:  netHTTP,
-		Resolver:    resolver,
-		EgressProxy: proxyConfigured,
-		Version:     version,
+		HTTPClient:        netHTTP,
+		Resolver:          resolver,
+		EgressProxy:       proxyConfigured,
+		Version:           version,
+		ClientIPHeader:    cfg.ClientIPHeader,
+		TrustedProxyCIDRs: trustedCIDRs,
 	})
 	if err != nil {
 		slog.Error("初始化服务失败", "err", err)

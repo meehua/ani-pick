@@ -58,7 +58,7 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
-	if !s.limits.allow("login:"+clientIP(r), 0.08, 6) {
+	if !s.limits.allow("login:"+s.clientIP(r), 0.08, 6) {
 		fail(w, http.StatusTooManyRequests, "rate_limited", "尝试过于频繁，请稍后再试", "")
 		return
 	}
