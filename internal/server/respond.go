@@ -21,6 +21,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
+// writeJSONBytes 直接写出已序列化的 JSON（响应缓存命中路径）。
+func writeJSONBytes(w http.ResponseWriter, status int, body []byte) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
 func fail(w http.ResponseWriter, status int, code, message, hint string) {
 	writeJSON(w, status, map[string]apiError{"error": {Code: code, Message: message, Hint: hint}})
 }

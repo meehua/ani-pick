@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -132,10 +133,17 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 }
 
 type cachedMetaTags struct {
-	key  string
 	at   time.Time
 	data []store.TagStat
 }
+
+// metaTagsTTL 是元标签候选的缓存时长；条目上限用于淘汰长期不用的参数组合。
+const (
+	metaTagsTTL      = 10 * time.Minute
+	metaTagsMaxKeys  = 64
+	metaCacheTTL     = 30 * time.Second
+	overviewCacheTTL = 3 * time.Second
+)
 
 func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 	typ := parseIntParam(r, "type", 0)
@@ -143,8 +151,8 @@ func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 	key := strconv.Itoa(typ) + ":" + strconv.Itoa(limit)
 
 	s.cacheMu.Lock()
-	if s.metaTags.key == key && time.Since(s.metaTags.at) < 10*time.Minute {
-		data := s.metaTags.data
+	if e, ok := s.metaTags[key]; ok && time.Since(e.at) < metaTagsTTL {
+		data := e.data
 		s.cacheMu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{"items": data})
 		return
@@ -157,21 +165,41 @@ func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cacheMu.Lock()
-	s.metaTags = cachedMetaTags{key: key, at: time.Now(), data: items}
+	if len(s.metaTags) >= metaTagsMaxKeys {
+		// 参数组合有限，整体重置比逐键清理更简单
+		s.metaTags = map[string]cachedMetaTags{}
+	}
+	s.metaTags[key] = cachedMetaTags{at: time.Now(), data: items}
 	s.cacheMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
+	s.metaMu.Lock()
+	body, fresh := s.metaBody, time.Since(s.metaBody.at) < metaCacheTTL
+	s.metaMu.Unlock()
+	if fresh && body.body != nil {
+		writeJSONBytes(w, http.StatusOK, body.body)
+		return
+	}
+
 	stats, err := s.store.Stats(r.Context())
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"name":    "AniPick",
 		"version": s.version,
 		"stats":   stats,
 		"crawler": s.crawler.Status(),
 	})
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	s.metaMu.Lock()
+	s.metaBody = cachedJSON{at: time.Now(), body: payload}
+	s.metaMu.Unlock()
+	writeJSONBytes(w, http.StatusOK, payload)
 }

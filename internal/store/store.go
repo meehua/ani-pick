@@ -3,6 +3,7 @@ package store
 
 import (
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,10 +16,21 @@ var ErrNotFound = errors.New("记录不存在")
 type Store struct {
 	Pool *pgxpool.Pool
 	Box  *secretbox.Box
+
+	// 进程内缓存：会话有效性（避免每管理请求一次 DB 写）、搜索总数（避免分页重复 count）。
+	sessMu     sync.Mutex
+	sessCache  map[string]sessionCacheEntry
+	countMu    sync.Mutex
+	countCache map[string]countEntry
 }
 
 func New(pool *pgxpool.Pool, box *secretbox.Box) *Store {
-	return &Store{Pool: pool, Box: box}
+	return &Store{
+		Pool:       pool,
+		Box:        box,
+		sessCache:  map[string]sessionCacheEntry{},
+		countCache: map[string]countEntry{},
+	}
 }
 
 // TagVote 是某个标签在单个条目中的票数与占比（百分比，0-100）。

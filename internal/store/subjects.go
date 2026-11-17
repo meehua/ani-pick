@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,6 +16,17 @@ import (
 const subjectColumns = `s.id, s.type, s.name, s.name_cn, COALESCE(to_char(s.date, 'YYYY-MM-DD'), ''),
 	s.platform, s.rank, s.score::float8, s.rating_total, s.wish, s.collect, s.doing, s.on_hold, s.dropped,
 	s.nsfw, s.meta_tags, s.image, s.tags_total, s.locked, s.fetched_at`
+
+// 搜索总数缓存：翻页复用同一 count，上限防止关键词型 key 无界增长。
+const (
+	searchCountTTL     = 30 * time.Second
+	searchCountMaxKeys = 256
+)
+
+type countEntry struct {
+	total int
+	at    time.Time
+}
 
 func scanSubject(row pgx.Row) (Subject, error) {
 	var sub Subject
@@ -328,9 +340,14 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 
 	where := strings.Join(conds, " AND ")
 
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM subjects s WHERE `+where, args...).Scan(&out.Total); err != nil {
-		return out, err
-	}
+	// 分页翻页时总数不变，count 结果按 where+参数缓存 30s，省掉重复的全量计数。
+	// 抓取写入导致的 30s 内总数偏差对分页 UI 无感。
+	countArgs := args // 快照：limit/offset 尚未追加
+	countKey := where + "|" + fmt.Sprint(args...)
+	s.countMu.Lock()
+	cached, ok := s.countCache[countKey]
+	s.countMu.Unlock()
+	countCached := ok && time.Since(cached.at) < searchCountTTL
 
 	dir := "ASC"
 	if strings.EqualFold(q.Order, "desc") {
@@ -360,8 +377,8 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 	limitPh := ph(q.PageSize)
 	offsetPh := ph((q.Page - 1) * q.PageSize)
 
-	rows, err := s.Pool.Query(ctx, `
-		SELECT `+subjectColumns+`, COALESCE(tg.tags, '[]'::jsonb)
+	pageSQL := `
+		SELECT ` + subjectColumns + `, COALESCE(tg.tags, '[]'::jsonb)
 		FROM subjects s
 		LEFT JOIN LATERAL (
 			SELECT jsonb_agg(jsonb_build_object('name', t.name, 'votes', x.votes, 'pct', x.pct)
@@ -373,11 +390,41 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 			) x
 			JOIN tags t ON t.id = x.tag_id
 		) tg ON TRUE
-		WHERE `+where+`
-		ORDER BY `+orderBy+`
-		LIMIT `+limitPh+` OFFSET `+offsetPh, args...)
-	if err != nil {
-		return out, err
+		WHERE ` + where + `
+		ORDER BY ` + orderBy + `
+		LIMIT ` + limitPh + ` OFFSET ` + offsetPh
+
+	var rows pgx.Rows
+	var qErr error
+	if countCached {
+		out.Total = cached.total
+		rows, qErr = s.Pool.Query(ctx, pageSQL, args...)
+		if qErr != nil {
+			return out, qErr
+		}
+	} else {
+		// count 未命中缓存：计数与取页并行执行，省一轮 IO 等待（不增总 CPU）
+		var cErr error
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cErr = s.Pool.QueryRow(ctx, `SELECT count(*) FROM subjects s WHERE `+where, countArgs...).Scan(&out.Total)
+		}()
+		rows, qErr = s.Pool.Query(ctx, pageSQL, args...)
+		wg.Wait()
+		if qErr != nil {
+			return out, qErr
+		}
+		if cErr != nil {
+			return out, cErr
+		}
+		s.countMu.Lock()
+		if len(s.countCache) >= searchCountMaxKeys {
+			s.countCache = map[string]countEntry{} // 用户输入型 key 无界增长，超限直接换新
+		}
+		s.countCache[countKey] = countEntry{total: out.Total, at: time.Now()}
+		s.countMu.Unlock()
 	}
 	defer rows.Close()
 
@@ -487,35 +534,54 @@ type Stats struct {
 
 func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	out := Stats{ByType: map[string]int{}}
-	err := s.Pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE nsfw) FROM subjects`).Scan(&out.Total, &out.NSFW)
-	if err != nil {
-		return out, err
-	}
-	rows, err := s.Pool.Query(ctx, `SELECT type, count(*) FROM subjects GROUP BY type`)
-	if err != nil {
-		return out, err
-	}
-	for rows.Next() {
-		var t, n int
-		if err := rows.Scan(&t, &n); err != nil {
-			rows.Close()
-			return out, err
-		}
-		out.ByType[strconv.Itoa(t)] = n
-	}
-	rows.Close()
 
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM tags`).Scan(&out.Tags); err != nil {
-		return out, err
+	// 六条独立统计查询并行执行：省 IO 等待（总 CPU 不变，都是同一批小聚合）
+	var wg sync.WaitGroup
+	errs := make([]error, 5)
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		errs[0] = s.Pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE nsfw) FROM subjects`).Scan(&out.Total, &out.NSFW)
+	}()
+	go func() {
+		defer wg.Done()
+		rows, err := s.Pool.Query(ctx, `SELECT type, count(*) FROM subjects GROUP BY type`)
+		if err != nil {
+			errs[1] = err
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var t, n int
+			if err := rows.Scan(&t, &n); err != nil {
+				errs[1] = err
+				return
+			}
+			out.ByType[strconv.Itoa(t)] = n
+		}
+		errs[1] = rows.Err()
+	}()
+	go func() {
+		defer wg.Done()
+		errs[2] = s.Pool.QueryRow(ctx, `SELECT count(*) FROM tags`).Scan(&out.Tags)
+	}()
+	go func() {
+		defer wg.Done()
+		errs[3] = s.Pool.QueryRow(ctx, `SELECT count(*) FROM subject_tags`).Scan(&out.SubjectTags)
+	}()
+	go func() {
+		defer wg.Done()
+		var last *time.Time
+		errs[4] = s.Pool.QueryRow(ctx, `SELECT max(fetched_at) FROM subjects`).Scan(&last)
+		out.LastFetched = last
+	}()
+	wg.Wait()
+	for _, e := range errs {
+		if e != nil {
+			return out, e
+		}
 	}
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM subject_tags`).Scan(&out.SubjectTags); err != nil {
-		return out, err
-	}
-	var last *time.Time
-	if err := s.Pool.QueryRow(ctx, `SELECT max(fetched_at) FROM subjects`).Scan(&last); err != nil {
-		return out, err
-	}
-	out.LastFetched = last
+	// 库体积是诊断信息，失败不影响统计可用性
 	_ = s.Pool.QueryRow(ctx, `SELECT pg_database_size(current_database())`).Scan(&out.DBSize)
 	return out, nil
 }

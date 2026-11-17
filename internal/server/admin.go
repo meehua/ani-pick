@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"anipick/internal/crawler"
@@ -18,25 +19,45 @@ func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
 }
 
+// handleAdminOverview 聚合 6+ 条统计 SQL；前端每 4s 轮询，
+// 加 3s TTL 缓存把空闲时的持续轮询开销压到接近零，抓取等动作后主动失效。
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.store.Stats(r.Context())
-	if err != nil {
-		internalError(w, err)
+	s.overviewMu.Lock()
+	body, fresh := s.overview, time.Since(s.overview.at) < overviewCacheTTL
+	s.overviewMu.Unlock()
+	if fresh && body.body != nil {
+		writeJSONBytes(w, http.StatusOK, body.body)
 		return
 	}
-	settings, err := s.store.LoadSettings(r.Context(), s.defaults)
-	if err != nil {
-		internalError(w, err)
+
+	// 三路查询相互独立，并行执行缩短缓存未命中时的聚合耗时（省 IO 等待，不增总 CPU）
+	var (
+		stats                          store.Stats
+		settings                       store.AppSettings
+		runs                           []store.Run
+		errStats, errSettings, errRuns error
+	)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() { defer wg.Done(); stats, errStats = s.store.Stats(r.Context()) }()
+	go func() { defer wg.Done(); settings, errSettings = s.store.LoadSettings(r.Context(), s.defaults) }()
+	go func() { defer wg.Done(); runs, errRuns = s.store.RecentRuns(r.Context(), 12) }()
+	wg.Wait()
+	if errStats != nil {
+		internalError(w, errStats)
 		return
 	}
-	runs, err := s.store.RecentRuns(r.Context(), 12)
-	if err != nil {
-		internalError(w, err)
+	if errSettings != nil {
+		internalError(w, errSettings)
+		return
+	}
+	if errRuns != nil {
+		internalError(w, errRuns)
 		return
 	}
 	stale, _ := s.store.CountStale(r.Context(), settings.Crawl.RefreshTTLDays, settings.Crawl.Types)
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"stats":   stats,
 		"crawler": s.crawler.Status(),
 		"runs":    runs,
@@ -49,6 +70,14 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 	})
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	s.overviewMu.Lock()
+	s.overview = cachedJSON{at: time.Now(), body: payload}
+	s.overviewMu.Unlock()
+	writeJSONBytes(w, http.StatusOK, payload)
 }
 
 type adminSettingsPayload struct {
@@ -110,6 +139,7 @@ func (s *Server) handleAdminPutSettings(w http.ResponseWriter, r *http.Request) 
 		internalError(w, err)
 		return
 	}
+	s.invalidateOverview()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "updated_at": next.UpdatedAt})
 }
 
@@ -158,6 +188,7 @@ func (s *Server) handleAdminStartCrawl(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, err.Error())
 		return
 	}
+	s.invalidateOverview()
 	writeJSON(w, http.StatusAccepted, map[string]any{"run_id": runID, "status": s.crawler.Status()})
 }
 
@@ -166,6 +197,7 @@ func (s *Server) handleAdminCancelCrawl(w http.ResponseWriter, r *http.Request) 
 		fail(w, http.StatusConflict, "not_running", "当前没有正在运行的抓取任务", "")
 		return
 	}
+	s.invalidateOverview()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -232,6 +264,7 @@ func (s *Server) handleAdminRefreshSubject(w http.ResponseWriter, r *http.Reques
 		fail(w, http.StatusBadGateway, "refresh_failed", "刷新失败", err.Error())
 		return
 	}
+	s.invalidateOverview()
 	writeJSON(w, http.StatusOK, sub)
 }
 
@@ -249,6 +282,7 @@ func (s *Server) handleAdminDeleteSubject(w http.ResponseWriter, r *http.Request
 		internalError(w, err)
 		return
 	}
+	s.invalidateOverview()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

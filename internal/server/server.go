@@ -31,7 +31,18 @@ type Server struct {
 	egressProxy bool
 
 	cacheMu  sync.Mutex
-	metaTags cachedMetaTags
+	metaTags map[string]cachedMetaTags
+
+	metaMu     sync.Mutex
+	metaBody   cachedJSON
+	overviewMu sync.Mutex
+	overview   cachedJSON
+}
+
+// cachedJSON 是带 TTL 的响应体缓存，命中时跳过查询与 JSON 编码。
+type cachedJSON struct {
+	at   time.Time
+	body []byte
 }
 
 // Options 是服务层的可选依赖（网络通道等）。
@@ -61,6 +72,7 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 		httpClient:  opts.HTTPClient,
 		resolver:    opts.Resolver,
 		egressProxy: opts.EgressProxy,
+		metaTags:    map[string]cachedMetaTags{},
 	}, nil
 }
 
@@ -99,6 +111,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/", s.spa())
 
 	return s.withMiddleware(mux)
+}
+
+// invalidateOverview 使管理端 overview 的响应缓存失效（抓取/设置等动作后调用）。
+func (s *Server) invalidateOverview() {
+	s.overviewMu.Lock()
+	s.overview = cachedJSON{}
+	s.overviewMu.Unlock()
 }
 
 func (s *Server) spa() http.Handler {
