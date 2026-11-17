@@ -1,6 +1,6 @@
 import { lazy, Suspense, type ReactNode } from 'react'
 import { Link, NavLink, Route, Routes } from 'react-router-dom'
-import { Compass, Home, KeyRound, Loader2, Moon, Shield, Sun, MonitorSmartphone, UserRound } from 'lucide-react'
+import { Compass, Home, KeyRound, Loader2, Moon, Sun, MonitorSmartphone, UserRound } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import {
@@ -104,16 +104,6 @@ function Shell() {
             </NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-1.5">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" asChild className="size-8">
-                  <Link to="/admin" aria-label="管理后台">
-                    <Shield size={15} />
-                  </Link>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>管理后台</TooltipContent>
-            </Tooltip>
             <AccountButton />
             <ThemeSwitch />
           </div>
@@ -144,7 +134,6 @@ function Shell() {
             <a href="https://bgm.tv" target="_blank" rel="noreferrer" className="hover:text-foreground">
               bgm.tv
             </a>
-            <Link to="/admin" className="hover:text-foreground">管理</Link>
           </div>
         </div>
       </footer>
