@@ -7,10 +7,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"anipick/internal/db"
 )
 
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
-	return s.recoverer(s.securityHeaders(s.generalLimit(s.logRequests(s.gzipResponse(next)))))
+	return s.recoverer(s.securityHeaders(s.generalLimit(s.traceMiddleware(s.logRequests(s.gzipResponse(next))))))
+}
+
+// traceMiddleware 在请求入口放置链路计时累积器（DB 由 pgx tracer 累加、
+// gzip 由压缩中间件累加），供管理端性能面板还原每请求的耗时构成。
+func (s *Server) traceMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, _ := db.WithTrace(r.Context())
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {

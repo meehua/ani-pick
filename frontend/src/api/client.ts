@@ -1,6 +1,7 @@
 import type {
   AdminOverview, AdminSettings, BgmCharacter, BgmEpisodeList, BgmPerson, BgmRelation,
-  BgmSubject, BgmUser, CrawlState, MetaResponse, NetworkStatus, Run, SearchResult, Subject, TagStat,
+  BgmSubject, BgmUser, CrawlState, MetaResponse, MetricsSnapshot, NetworkStatus, Run, SearchResult,
+  Subject, TagStat,
 } from './types'
 import { endpointCandidates, getActiveId, imageBase, recordUsedEndpoint, type Endpoint } from '../net/endpoints'
 
@@ -166,6 +167,10 @@ export const adminSearchSubjects = (params: SearchParams) => {
   if (params.sort) q.set('sort', params.sort)
   return apiGet<SearchResult>(`/api/admin/subjects?${q.toString()}`)
 }
+
+export const adminMetrics = () => apiGet<MetricsSnapshot>('/api/admin/metrics')
+export const adminMetricsReset = () =>
+  apiSend<{ ok: boolean }>('/api/admin/metrics/reset', 'POST', {})
 
 // ---------- 用户登录（凭据只在本机；详情由浏览器直接请求） ----------
 

@@ -281,6 +281,8 @@ docker compose up -d
 | `POST /api/admin/subjects/{id}/refresh` | 单条刷新 |
 | `DELETE /api/admin/subjects/{id}` | 从索引删除 |
 | `GET /api/admin/network` | 服务端抓取出口的 DoH/ECH 诊断 |
+| `GET /api/admin/metrics` | 性能监测：每路由耗时/大小/状态统计与链路拆分（DB/gzip/其余） |
+| `POST /api/admin/metrics/reset` | 清零性能统计（重新开始累计） |
 
 **不存在** `/api/bgm/*`、`/api/img`、用户凭证接收或 OAuth 兑换接口。
 

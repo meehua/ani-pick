@@ -161,6 +161,38 @@ export interface NetworkStatus {
   }
 }
 
+// ---------- 管理端性能监测 ----------
+
+// 单路由聚合：耗时/大小/状态码统计与链路拆分（DB / gzip / 其余=处理+编码）。
+export interface RouteMetrics {
+  route: string
+  count: number
+  errors: number
+  avg_ms: number
+  p95_ms: number
+  max_ms: number
+  avg_bytes: number
+  avg_db_ms: number
+  avg_gzip_ms: number
+}
+
+export interface MetricsRequest {
+  at: string
+  route: string
+  status: number
+  ms: number
+  db_ms: number
+  gzip_ms: number
+  bytes: number
+}
+
+export interface MetricsSnapshot {
+  since: string
+  uptime_s: number
+  routes: RouteMetrics[]
+  recent: MetricsRequest[]
+}
+
 // ---------- Bangumi 直连 ----------
 
 export interface BgmImages {

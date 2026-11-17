@@ -27,6 +27,8 @@ func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	cfg.MinConns = 2
 	cfg.MaxConnLifetime = time.Hour
 	cfg.HealthCheckPeriod = 30 * time.Second
+	// 每条 SQL 的耗时进请求链路累积器（管理端性能面板用）
+	cfg.ConnConfig.Tracer = Tracer{}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

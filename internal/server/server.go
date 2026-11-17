@@ -37,6 +37,8 @@ type Server struct {
 	metaBody   cachedJSON
 	overviewMu sync.Mutex
 	overview   cachedJSON
+
+	m *metrics
 }
 
 // cachedJSON 是带 TTL 的响应体缓存，命中时跳过查询与 JSON 编码。
@@ -73,6 +75,7 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 		resolver:    opts.Resolver,
 		egressProxy: opts.EgressProxy,
 		metaTags:    map[string]cachedMetaTags{},
+		m:           newMetrics(),
 	}, nil
 }
 
@@ -84,31 +87,38 @@ func (s *Server) bgmClient(settings store.AppSettings) *bgm.Client {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /api/health", s.handleHealth)
-	mux.HandleFunc("GET /api/meta", s.handleMeta)
-	mux.HandleFunc("GET /api/subjects", s.handleSearch)
-	mux.HandleFunc("GET /api/subjects/{id}", s.handleSubjectIndex)
-	mux.HandleFunc("GET /api/tags", s.handleTags)
-	mux.HandleFunc("GET /api/meta-tags", s.handleMetaTags)
+	// reg = 注册 + 性能统计包装（按注册模式聚合耗时/大小/状态码）
+	reg := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, s.withMetrics(pattern, h))
+	}
 
-	mux.HandleFunc("POST /api/admin/login", s.handleAdminLogin)
-	mux.HandleFunc("POST /api/admin/logout", s.handleAdminLogout)
-	mux.HandleFunc("GET /api/admin/session", s.requireAdmin(s.handleAdminSession))
-	mux.HandleFunc("GET /api/admin/overview", s.requireAdmin(s.handleAdminOverview))
-	mux.HandleFunc("GET /api/admin/network", s.requireAdmin(s.handleAdminNetwork))
-	mux.HandleFunc("GET /api/admin/settings", s.requireAdmin(s.handleAdminGetSettings))
-	mux.HandleFunc("PUT /api/admin/settings", s.requireAdmin(s.handleAdminPutSettings))
-	mux.HandleFunc("POST /api/admin/password", s.requireAdmin(s.handleAdminPassword))
-	mux.HandleFunc("POST /api/admin/credential/test", s.requireAdmin(s.handleAdminTestCredential))
-	mux.HandleFunc("POST /api/admin/crawl", s.requireAdmin(s.handleAdminStartCrawl))
-	mux.HandleFunc("POST /api/admin/crawl/cancel", s.requireAdmin(s.handleAdminCancelCrawl))
-	mux.HandleFunc("GET /api/admin/runs", s.requireAdmin(s.handleAdminRuns))
-	mux.HandleFunc("GET /api/admin/runs/{id}", s.requireAdmin(s.handleAdminRun))
-	mux.HandleFunc("GET /api/admin/subjects", s.requireAdmin(s.handleAdminSubjects))
-	mux.HandleFunc("POST /api/admin/subjects/{id}/refresh", s.requireAdmin(s.handleAdminRefreshSubject))
-	mux.HandleFunc("DELETE /api/admin/subjects/{id}", s.requireAdmin(s.handleAdminDeleteSubject))
+	reg("GET /api/health", s.handleHealth)
+	reg("GET /api/meta", s.handleMeta)
+	reg("GET /api/subjects", s.handleSearch)
+	reg("GET /api/subjects/{id}", s.handleSubjectIndex)
+	reg("GET /api/tags", s.handleTags)
+	reg("GET /api/meta-tags", s.handleMetaTags)
 
-	mux.Handle("/", s.spa())
+	reg("POST /api/admin/login", s.handleAdminLogin)
+	reg("POST /api/admin/logout", s.handleAdminLogout)
+	reg("GET /api/admin/session", s.requireAdmin(s.handleAdminSession))
+	reg("GET /api/admin/overview", s.requireAdmin(s.handleAdminOverview))
+	reg("GET /api/admin/network", s.requireAdmin(s.handleAdminNetwork))
+	reg("GET /api/admin/settings", s.requireAdmin(s.handleAdminGetSettings))
+	reg("PUT /api/admin/settings", s.requireAdmin(s.handleAdminPutSettings))
+	reg("POST /api/admin/password", s.requireAdmin(s.handleAdminPassword))
+	reg("POST /api/admin/credential/test", s.requireAdmin(s.handleAdminTestCredential))
+	reg("POST /api/admin/crawl", s.requireAdmin(s.handleAdminStartCrawl))
+	reg("POST /api/admin/crawl/cancel", s.requireAdmin(s.handleAdminCancelCrawl))
+	reg("GET /api/admin/runs", s.requireAdmin(s.handleAdminRuns))
+	reg("GET /api/admin/runs/{id}", s.requireAdmin(s.handleAdminRun))
+	reg("GET /api/admin/subjects", s.requireAdmin(s.handleAdminSubjects))
+	reg("POST /api/admin/subjects/{id}/refresh", s.requireAdmin(s.handleAdminRefreshSubject))
+	reg("DELETE /api/admin/subjects/{id}", s.requireAdmin(s.handleAdminDeleteSubject))
+	reg("GET /api/admin/metrics", s.requireAdmin(s.handleAdminMetrics))
+	reg("POST /api/admin/metrics/reset", s.requireAdmin(s.handleAdminMetricsReset))
+
+	mux.Handle("/", s.withMetrics(staticRoute, s.spa()))
 
 	return s.withMiddleware(mux)
 }

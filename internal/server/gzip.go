@@ -11,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"anipick/internal/db"
 )
 
 // gzip 相关常量：过小的响应不值得压缩（gzip 头尾开销可能超过收益）。
@@ -106,6 +109,7 @@ func acceptsGzip(ae string) bool {
 type gzipWriter struct {
 	http.ResponseWriter
 	gz          *gzip.Writer
+	trace       *db.RequestTrace
 	wroteHeader bool
 	enabled     bool
 }
@@ -149,6 +153,12 @@ func (g *gzipWriter) Write(b []byte) (int, error) {
 		g.gz = gzipPool.Get().(*gzip.Writer)
 		g.gz.Reset(g.ResponseWriter)
 	}
+	if g.trace != nil {
+		t0 := time.Now()
+		n, err := g.gz.Write(b)
+		g.trace.Gzip.Add(int64(time.Since(t0)))
+		return n, err
+	}
 	return g.gz.Write(b)
 }
 
@@ -172,11 +182,17 @@ func (s *Server) gzipResponse(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		gw := &gzipWriter{ResponseWriter: w}
+		gw := &gzipWriter{ResponseWriter: w, trace: db.TraceFrom(r.Context())}
 		defer func() {
 			if gw.gz != nil {
 				// Close 冲刷剩余字节与校验尾；panic 时也保证流完整
-				_ = gw.gz.Close()
+				if gw.trace != nil {
+					t0 := time.Now()
+					_ = gw.gz.Close()
+					gw.trace.Gzip.Add(int64(time.Since(t0)))
+				} else {
+					_ = gw.gz.Close()
+				}
 				gw.gz.Reset(io.Discard)
 				gzipPool.Put(gw.gz)
 			}

@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import {
   Activity, Database, HardDrive, Loader2, LogOut, Play, RefreshCw, Save, Square, Tags, Timer, Trash2,
 } from 'lucide-react'
-import { ApiError, adminCancelCrawl, adminChangePassword, adminDeleteSubject, adminGetSettings, adminNetwork,
-  adminLogout, adminOverview, adminRefreshSubject, adminSaveSettings, adminSearchSubjects,
-  adminSession, adminStartCrawl, adminTestCredential } from '../api/client'
-import type { AdminOverview, AdminSettings, CrawlProgress, CrawlSettings, NetworkStatus, Run, SearchResult } from '../api/types'
+import { ApiError, adminCancelCrawl, adminChangePassword, adminDeleteSubject, adminGetSettings, adminMetrics,
+  adminMetricsReset, adminNetwork, adminLogout, adminOverview, adminRefreshSubject, adminSaveSettings,
+  adminSearchSubjects, adminSession, adminStartCrawl, adminTestCredential } from '../api/client'
+import type { AdminOverview, AdminSettings, CrawlProgress, CrawlSettings, MetricsSnapshot, NetworkStatus,
+  Run, SearchResult } from '../api/types'
 import { TYPE_LABEL, TYPE_ORDER } from '../api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,6 +25,8 @@ export default function AdminPage() {
   const [settings, setSettings] = React.useState<AdminSettings | null>(null)
   const [notice, setNotice] = React.useState('')
   const [error, setError] = React.useState('')
+  const [tab, setTab] = React.useState('overview')
+  const [metrics, setMetrics] = React.useState<MetricsSnapshot | null>(null)
 
   const loadOverview = React.useCallback(async () => {
     try {
@@ -32,6 +35,14 @@ export default function AdminPage() {
       if (e instanceof ApiError && e.status === 401) navigate('/admin/login', { replace: true })
     }
   }, [navigate])
+
+  const loadMetrics = React.useCallback(async () => {
+    try {
+      setMetrics(await adminMetrics())
+    } catch {
+      // 401 由 overview 轮询统一处理跳登录；这里静默保留旧数据
+    }
+  }, [])
 
   React.useEffect(() => {
     adminSession()
@@ -51,6 +62,16 @@ export default function AdminPage() {
     }, 4000)
     return () => window.clearInterval(t)
   }, [ready, loadOverview])
+
+  // 性能数据只在对应 Tab 激活时拉取，同样遵守可见性暂停
+  React.useEffect(() => {
+    if (!ready || tab !== 'perf') return
+    void loadMetrics()
+    const t = window.setInterval(() => {
+      if (!document.hidden) void loadMetrics()
+    }, 4000)
+    return () => window.clearInterval(t)
+  }, [ready, tab, loadMetrics])
 
   async function startCrawl(mode: 'full' | 'incremental' | 'refresh') {
     if (mode === 'full' && !window.confirm(
@@ -108,12 +129,13 @@ export default function AdminPage() {
       {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{notice}</div>}
       {error && <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>}
 
-      <Tabs defaultValue="overview">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">概览</TabsTrigger>
           <TabsTrigger value="crawl">抓取</TabsTrigger>
           <TabsTrigger value="data">数据</TabsTrigger>
           <TabsTrigger value="settings">设置</TabsTrigger>
+          <TabsTrigger value="perf">性能</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="pt-4">
@@ -203,6 +225,10 @@ export default function AdminPage() {
               onError={setError}
             />
           )}
+        </TabsContent>
+
+        <TabsContent value="perf" className="pt-4">
+          <PerfPanel metrics={metrics} onRefresh={() => void loadMetrics()} onReset={() => void adminMetricsReset().then(() => void loadMetrics())} />
         </TabsContent>
       </Tabs>
     </div>
@@ -743,6 +769,123 @@ function SettingsPanel({ settings, onSaved, onError }: {
             修改密码
           </Button>
           {pwMsg && <span className="text-[11px] text-muted-foreground">{pwMsg}</span>}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+// ---------- 性能监测 ----------
+
+function msFmt(v: number): string {
+  return v >= 100 ? Math.round(v).toString() : v.toFixed(1)
+}
+
+function PerfPanel({ metrics, onRefresh, onReset }: {
+  metrics: MetricsSnapshot | null
+  onRefresh: () => void
+  onReset: () => void
+}) {
+  if (!metrics) {
+    return (
+      <p className="py-10 text-center text-xs text-muted-foreground">
+        <Loader2 size={12} className="mr-1 inline animate-spin" /> 加载性能数据…
+      </p>
+    )
+  }
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-sm">路由响应统计</CardTitle>
+          <div className="flex items-center gap-1.5">
+            <span className="mr-1 text-[10px] text-muted-foreground">
+              自 {fmtDateTime(metrics.since)} · 已运行 {fmtNum(metrics.uptime_s)} 秒
+            </span>
+            <Button size="sm" variant="outline" onClick={onRefresh} className="gap-1">
+              <RefreshCw size={12} /> 刷新
+            </Button>
+            <Button size="sm" variant="outline" onClick={onReset} className="gap-1">
+              <Trash2 size={12} /> 复位
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          {metrics.routes.length === 0 ? (
+            <p className="py-4 text-center text-xs text-muted-foreground">暂无请求样本</p>
+          ) : (
+            <table className="w-full min-w-[760px] text-xs">
+              <thead className="text-left text-muted-foreground">
+                <tr className="border-b">
+                  <th className="py-1.5 pr-2 font-medium">路由</th>
+                  <th className="py-1.5 pr-2 font-medium">请求</th>
+                  <th className="py-1.5 pr-2 font-medium">错误</th>
+                  <th className="py-1.5 pr-2 font-medium">平均 ms</th>
+                  <th className="py-1.5 pr-2 font-medium">p95 ms</th>
+                  <th className="py-1.5 pr-2 font-medium">最大 ms</th>
+                  <th className="py-1.5 pr-2 font-medium">平均大小</th>
+                  <th className="py-1.5 pr-2 font-medium">DB ms</th>
+                  <th className="py-1.5 pr-2 font-medium">gzip ms</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metrics.routes.map(rt => (
+                  <tr key={rt.route} className="border-b last:border-0">
+                    <td className="py-1.5 pr-2 font-mono text-[11px]">{rt.route}</td>
+                    <td className="py-1.5 pr-2 tabular-nums">{fmtNum(rt.count)}</td>
+                    <td className={'py-1.5 pr-2 tabular-nums' + (rt.errors ? ' text-destructive' : '')}>{rt.errors}</td>
+                    <td className="py-1.5 pr-2 tabular-nums">{msFmt(rt.avg_ms)}</td>
+                    <td className="py-1.5 pr-2 tabular-nums">{msFmt(rt.p95_ms)}</td>
+                    <td className="py-1.5 pr-2 tabular-nums">{msFmt(rt.max_ms)}</td>
+                    <td className="py-1.5 pr-2 tabular-nums">{fmtBytes(rt.avg_bytes)}</td>
+                    <td className="py-1.5 pr-2 tabular-nums text-muted-foreground">{msFmt(rt.avg_db_ms)}</td>
+                    <td className="py-1.5 pr-2 tabular-nums text-muted-foreground">{msFmt(rt.avg_gzip_ms)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+            链路拆分：总耗时 ≈ DB（pgx 计时） + gzip（压缩计时） + 其余（处理与 JSON 编码）；大小为走线字节（已含压缩效果）。
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-sm">最近请求</CardTitle></CardHeader>
+        <CardContent className="overflow-x-auto">
+          {metrics.recent.length === 0 ? (
+            <p className="py-4 text-center text-xs text-muted-foreground">暂无记录</p>
+          ) : (
+            <table className="w-full min-w-[680px] text-xs">
+              <thead className="text-left text-muted-foreground">
+                <tr className="border-b">
+                  <th className="py-1.5 pr-2 font-medium">时间</th>
+                  <th className="py-1.5 pr-2 font-medium">路由</th>
+                  <th className="py-1.5 pr-2 font-medium">状态</th>
+                  <th className="py-1.5 pr-2 font-medium">总 ms</th>
+                  <th className="py-1.5 pr-2 font-medium">DB ms</th>
+                  <th className="py-1.5 pr-2 font-medium">gzip ms</th>
+                  <th className="py-1.5 pr-2 font-medium">大小</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metrics.recent.slice(0, 80).map((rq, i) => (
+                  <tr key={`${rq.at}-${i}`} className="border-b last:border-0">
+                    <td className="py-1.5 pr-2 text-muted-foreground">{fmtDateTime(rq.at)}</td>
+                    <td className="py-1.5 pr-2 font-mono text-[11px]">{rq.route}</td>
+                    <td className={'py-1.5 pr-2 tabular-nums ' + (rq.status >= 500 ? 'text-destructive' : rq.status >= 400 ? 'text-amber-600' : '')}>
+                      {rq.status}
+                    </td>
+                    <td className="py-1.5 pr-2 tabular-nums">{msFmt(rq.ms)}</td>
+                    <td className="py-1.5 pr-2 tabular-nums text-muted-foreground">{msFmt(rq.db_ms)}</td>
+                    <td className="py-1.5 pr-2 tabular-nums text-muted-foreground">{msFmt(rq.gzip_ms)}</td>
+                    <td className="py-1.5 pr-2 tabular-nums">{fmtBytes(rq.bytes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </CardContent>
       </Card>
     </div>
