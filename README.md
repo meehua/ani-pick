@@ -28,7 +28,7 @@ Go 后端（单二进制，内嵌前端）+ PostgreSQL；前端 React 19 + shadc
 
 ## 快速开始
 
-需要 Go ≥ 1.24、Node.js ≥ 18、PostgreSQL ≥ 13。
+需要 Go ≥ 1.27、Node.js ≥ 20、PostgreSQL ≥ 13。
 
 ```bash
 createdb -U postgres ani_pick          # 默认库名/用户/密码均为 ani_pick
@@ -176,6 +176,41 @@ frontend/               Vite + React 19 + shadcn/ui
   src/net/endpoints.ts  官方 / 镜像通道、用户自定义镜像（本机）
 scripts/                build / dev / smoke
 ```
+
+## 发版
+
+发版由 `.github/workflows/release.yml` 完成，触发条件是推送 `v*` 标签：
+
+```bash
+git switch main
+git pull
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+工作流会：
+
+1. 校验标签提交是否在 `main` 上（不在则失败）；
+2. 构建前端并嵌入 Go 二进制；
+3. 生成 linux / windows / darwin 多平台二进制与 `checksums.txt`；
+4. 推送多架构容器镜像到 GHCR：
+   - `ghcr.io/<owner>/<repo>:1.0.0`
+   - `ghcr.io/<owner>/<repo>:1.0`
+   - `ghcr.io/<owner>/<repo>:1`
+   - `latest`（非预发布标签）
+5. 用 `git log <上一个 tag>..<当前 tag>` 生成 Release 日志，创建或更新 GitHub Release。
+
+容器运行示例：
+
+```bash
+docker run --rm -p 8787:8787 \
+  -e ANIPICK_DATABASE_URL='postgres://ani_pick:ani_pick@host.docker.internal:5432/ani_pick?sslmode=disable' \
+  -e ANIPICK_ADMIN_PASSWORD='change-me' \
+  -e ANIPICK_SECRET='change-me' \
+  ghcr.io/<owner>/<repo>:1.0.0
+```
+
+GHCR 首次推送的 package 可能是私有；需要在 GitHub Package 设置里改为 public，匿名用户才能拉取。
 
 ## 测试
 

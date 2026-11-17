@@ -1,4 +1,4 @@
-// AniPick：基于本地 Bangumi 索引的条目检索与发现工具。
+// AniPick：基于本站 Bangumi 索引的条目检索与发现工具。
 package main
 
 import (
@@ -19,6 +19,12 @@ import (
 	"anipick/internal/secretbox"
 	"anipick/internal/server"
 	"anipick/internal/store"
+)
+
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
 )
 
 func main() {
@@ -113,6 +119,7 @@ func main() {
 		HTTPClient:  netHTTP,
 		Resolver:    resolver,
 		EgressProxy: proxyConfigured,
+		Version:     version,
 	})
 	if err != nil {
 		slog.Error("初始化服务失败", "err", err)
@@ -142,7 +149,9 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("AniPick 已启动", "addr", cfg.Addr, "env", cfg.EnvFile)
+		slog.Info("AniPick 已启动",
+			"version", version, "commit", commit, "build_date", buildDate,
+			"addr", cfg.Addr, "env", cfg.EnvFile)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("服务异常退出", "err", err)
 			stop()

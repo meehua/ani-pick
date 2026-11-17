@@ -1,5 +1,7 @@
 # 构建产物
 /anipick
+/dist/
+RELEASE_NOTES.md
 /frontend/dist/
 /internal/server/dist/*
 !/internal/server/dist/.gitkeep

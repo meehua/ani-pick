@@ -39,6 +39,7 @@ type Options struct {
 	HTTPClient  *http.Client
 	Resolver    *netx.Resolver
 	EgressProxy bool
+	Version     string
 }
 
 func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts Options) (*Server, error) {
@@ -46,13 +47,17 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 	if err != nil {
 		return nil, err
 	}
+	ver := opts.Version
+	if ver == "" {
+		ver = "dev"
+	}
 	return &Server{
 		store:       st,
 		crawler:     cw,
 		defaults:    defaults,
 		static:      sub,
 		limits:      newLimiter(),
-		version:     "1.0.0",
+		version:     ver,
 		httpClient:  opts.HTTPClient,
 		resolver:    opts.Resolver,
 		egressProxy: opts.EgressProxy,

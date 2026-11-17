@@ -1,0 +1,21 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+
+# 本地二进制与发布产物
+anipick
+dist
+
+frontend/node_modules
+frontend/dist
+frontend/tsconfig.tsbuildinfo
+
+# 仓库里的前端产物占位；镜像内由 frontend 构建阶段提供
+internal/server/dist/*
+!internal/server/dist/.gitkeep
+
+*.log
+
+RELEASE_NOTES.md
