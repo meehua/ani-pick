@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { Link, NavLink, Route, Routes } from 'react-router-dom'
-import { Compass, Home, KeyRound, Moon, Shield, Sun, MonitorSmartphone, UserRound } from 'lucide-react'
+import { Compass, Home, KeyRound, Loader2, Moon, Shield, Sun, MonitorSmartphone, UserRound } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,11 +11,21 @@ import { AuthDialogProvider, useAuthDialog } from '@/components/auth-dialog-prov
 import { useTheme, type Theme } from '@/components/theme-provider'
 import { useCredential } from './lib/credential'
 import HomePage from './pages/HomePage'
-import BrowsePage from './pages/BrowsePage'
-import SubjectPage from './pages/SubjectPage'
-import AdminLoginPage from './pages/AdminLoginPage'
-import AdminPage from './pages/AdminPage'
 import NotFoundPage from './pages/NotFoundPage'
+
+// 非首屏页面按需加载：把浏览/条目/管理代码从首屏 bundle 里拆出去
+const BrowsePage = lazy(() => import('./pages/BrowsePage'))
+const SubjectPage = lazy(() => import('./pages/SubjectPage'))
+const AdminLoginPage = lazy(() => import('./pages/AdminLoginPage'))
+const AdminPage = lazy(() => import('./pages/AdminPage'))
+
+function RouteLoading() {
+  return (
+    <div className="flex items-center justify-center py-24 text-muted-foreground">
+      <Loader2 className="animate-spin" size={20} />
+    </div>
+  )
+}
 
 function ThemeSwitch() {
   const { theme, setTheme } = useTheme()
@@ -112,14 +122,16 @@ function Shell() {
 
       <main className="flex-1">
         <div className="mx-auto w-full max-w-7xl px-4 py-6">
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/browse" element={<BrowsePage />} />
-            <Route path="/subject/:id" element={<SubjectPage />} />
-            <Route path="/admin/login" element={<AdminLoginPage />} />
-            <Route path="/admin" element={<AdminPage />} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
+          <Suspense fallback={<RouteLoading />}>
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/browse" element={<BrowsePage />} />
+              <Route path="/subject/:id" element={<SubjectPage />} />
+              <Route path="/admin/login" element={<AdminLoginPage />} />
+              <Route path="/admin" element={<AdminPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </Suspense>
         </div>
       </main>
 

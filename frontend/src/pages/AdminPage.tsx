@@ -45,7 +45,10 @@ export default function AdminPage() {
 
   React.useEffect(() => {
     if (!ready) return
-    const t = window.setInterval(() => void loadOverview(), 4000)
+    const t = window.setInterval(() => {
+      // 页面不可见时跳过轮询，避免后台标签页持续打数据库
+      if (!document.hidden) void loadOverview()
+    }, 4000)
     return () => window.clearInterval(t)
   }, [ready, loadOverview])
 
