@@ -33,8 +33,11 @@ HTML 与 API 每次回源）。以下约束是实现里已经落地的取舍，�
   必须自行接上压缩。基准数据：471KB 主包 L6 压缩 8.5ms（E5 超售机约 25-50ms），
   所以静态必须缓存、动态按需压、禁用 L9。
 - **热点只读查询必须有 TTL 缓存**：搜索总数（`store.Search` 的 count 缓存 30s）、
-  `/api/meta`（30s）、`/api/meta-tags`（10 分钟、多键）、`/api/admin/overview`（3s，
-  抓取/设置等动作后 `invalidateOverview()`）。新增同类查询照此办理，并写明失效时机。
+  搜索页结果（5s、多键）、`/api/meta`（30s）、`/api/meta-tags`（10 分钟、多键）、
+  `/api/admin/overview`（3s，抓取/设置等动作后 `invalidateOverview()`）。
+  新增同类查询照此办理，并写明失效时机。公开 GET 端点响应带
+  `Cache-Control: public, max-age=30`（浏览器与 CF 边缘吸收重复请求）；
+  管理端与错误响应保持 no-store。
 - **管理面校验禁止每请求写库**：会话校验走 `store.SessionValid` 的进程内缓存
   （1 分钟 TTL，`last_seen` 至多 10 分钟落一次库）；登出/改密必须清缓存
   （`DeleteSession` / `DeleteAllSessions` 已处理，新路径不得绕过）。
@@ -42,7 +45,8 @@ HTML 与 API 每次回源）。以下约束是实现里已经落地的取舍，�
   时必须跳过请求（见 `AdminPage.tsx`）。
 - **禁 N+1**：批量组装一次 `IN` / `ANY($1)` 查询（现有 `Search`、`UpsertSubjects` 即如此）。
 - **内存有界**：1GB 机器上一切进程内缓存/环形缓冲必须带上限（现状：
-  metaTags 64 / countCache 256 / sessCache 512 / metrics recent 256 / 每路由样本 256）。
+  metaTags 64 / countCache 256 / pageCache 256 / sessCache 512 /
+  metrics recent 256 / 每路由样本 256）。
 - **新增环境变量**：必须进 `.env.example` 并在 README 配置表说明，含安全前提。
 
 ## 新端点/新路由 Checklist

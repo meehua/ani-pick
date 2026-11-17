@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +72,44 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "db": "up", "time": time.Now()})
 }
 
+// 公开 GET 端点的浏览器/CDN 缓存时长；列表类数据只在抓取后变化，30s 陈旧无感。
+const publicCacheTTL = 30 * time.Second
+
+// searchPageCacheTTL 是搜索页结果的进程内缓存：并发访客的相同视图（首页/浏览页
+// 默认列表等）共享同一份结果字节，省掉重复查询与 JSON 编码。
+const (
+	searchPageCacheTTL = 5 * time.Second
+	searchPageMaxKeys  = 256
+)
+
+// searchCacheKey 生成与查询语义一一对应的缓存键：列表参数排序去重、关键词去空白，
+// 使参数顺序不同的等价查询命中同一份缓存。
+func searchCacheKey(q store.SearchQuery) string {
+	types := append([]int(nil), q.Types...)
+	sort.Ints(types)
+	norm := func(in []string) []string {
+		seen := map[string]struct{}{}
+		out := make([]string, 0, len(in))
+		for _, v := range in {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				continue
+			}
+			if _, ok := seen[v]; ok {
+				continue
+			}
+			seen[v] = struct{}{}
+			out = append(out, v)
+		}
+		sort.Strings(out)
+		return out
+	}
+	return fmt.Sprintf("%s|%v|%v|%v|%s|%v|%s|%s|%d|%d|%g|%g|%d|%s|%s|%s|%d|%d",
+		strings.TrimSpace(q.Keyword), types, norm(q.Tags), norm(q.ExcludeTags), q.TagMode,
+		norm(q.MetaTags), q.DateFrom, q.DateTo, q.RankMin, q.RankMax,
+		q.ScoreMin, q.ScoreMax, q.RatingMin, q.NSFW, q.Sort, q.Order, q.Page, q.PageSize)
+}
+
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := store.SearchQuery{
 		Keyword:     r.URL.Query().Get("keyword"),
@@ -95,6 +135,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if q.Page > 5000 {
 		q.Page = 5000
 	}
+	key := searchCacheKey(q)
+	s.pageMu.Lock()
+	if e, ok := s.pageCache[key]; ok && time.Since(e.at) < searchPageCacheTTL {
+		body := e.body
+		s.pageMu.Unlock()
+		writeJSONTTL(w, http.StatusOK, body, publicCacheTTL)
+		return
+	}
+	s.pageMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 	res, err := s.store.Search(ctx, q)
@@ -102,7 +152,18 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	payload, err := json.Marshal(res)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	s.pageMu.Lock()
+	if len(s.pageCache) >= searchPageMaxKeys {
+		s.pageCache = map[string]cachedJSON{} // 查询组合无界，超限整体换新
+	}
+	s.pageCache[key] = cachedJSON{at: time.Now(), body: payload}
+	s.pageMu.Unlock()
+	writeJSONTTL(w, http.StatusOK, payload, publicCacheTTL)
 }
 
 func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +190,12 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": tags})
+	payload, err := json.Marshal(map[string]any{"items": tags})
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSONTTL(w, http.StatusOK, payload, publicCacheTTL)
 }
 
 type cachedMetaTags struct {
@@ -154,7 +220,7 @@ func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 	if e, ok := s.metaTags[key]; ok && time.Since(e.at) < metaTagsTTL {
 		data := e.data
 		s.cacheMu.Unlock()
-		writeJSON(w, http.StatusOK, map[string]any{"items": data})
+		writeJSONTTL(w, http.StatusOK, mustMarshalItems(data), publicCacheTTL)
 		return
 	}
 	s.cacheMu.Unlock()
@@ -171,7 +237,17 @@ func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 	}
 	s.metaTags[key] = cachedMetaTags{at: time.Now(), data: items}
 	s.cacheMu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSONTTL(w, http.StatusOK, mustMarshalItems(items), publicCacheTTL)
+}
+
+// mustMarshalItems 序列化标签候选列表；TagStat 字段全是基础类型，不会失败。
+func mustMarshalItems(items []store.TagStat) []byte {
+	body, err := json.Marshal(map[string]any{"items": items})
+	if err != nil {
+		// 理论上不可达；兜底空列表，避免调用方处理错误分支
+		return []byte(`{"items":[]}`)
+	}
+	return body
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +255,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	body, fresh := s.metaBody, time.Since(s.metaBody.at) < metaCacheTTL
 	s.metaMu.Unlock()
 	if fresh && body.body != nil {
-		writeJSONBytes(w, http.StatusOK, body.body)
+		writeJSONTTL(w, http.StatusOK, body.body, publicCacheTTL)
 		return
 	}
 
@@ -201,5 +277,5 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	s.metaMu.Lock()
 	s.metaBody = cachedJSON{at: time.Now(), body: payload}
 	s.metaMu.Unlock()
-	writeJSONBytes(w, http.StatusOK, payload)
+	writeJSONTTL(w, http.StatusOK, payload, publicCacheTTL)
 }

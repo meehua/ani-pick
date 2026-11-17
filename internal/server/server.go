@@ -41,6 +41,9 @@ type Server struct {
 	overviewMu sync.Mutex
 	overview   cachedJSON
 
+	pageMu    sync.Mutex
+	pageCache map[string]cachedJSON
+
 	m *metrics
 }
 
@@ -80,6 +83,7 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 		resolver:       opts.Resolver,
 		egressProxy:    opts.EgressProxy,
 		metaTags:       map[string]cachedMetaTags{},
+		pageCache:      map[string]cachedJSON{},
 		clientIPHeader: strings.TrimSpace(opts.ClientIPHeader),
 		trustedCIDRs:   opts.TrustedProxyCIDRs,
 		m:              newMetrics(),

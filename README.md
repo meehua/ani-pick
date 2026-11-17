@@ -255,6 +255,7 @@ docker compose up -d
 | `ANIPICK_EGRESS_PROXY` | — | **仅服务端抓取**的出站代理（http/https/socks5）；用户请求永不经过服务端 |
 | `ANIPICK_CLIENT_IP_HEADER` | — | 客户端真实 IP 请求头（如 Cloudflare 的 `CF-Connecting-IP`）；仅当 TCP 对端属于 `ANIPICK_TRUSTED_PROXY_CIDRS` 时才采信，防止伪造头绕过限流 |
 | `ANIPICK_TRUSTED_PROXY_CIDRS` | — | 可信反代网段（逗号分隔 CIDR，Cloudflare 见 [cloudflare.com/ips](https://www.cloudflare.com/ips/)）；与 `ANIPICK_CLIENT_IP_HEADER` 配套使用 |
+| `ANIPICK_DB_MAX_CONNS` / `ANIPICK_DB_MIN_CONNS` | `12` / `2` | 连接池规格，默认按 1GB 内存机校准；换大机器按内存提高（每个连接对应一个 PG 后端进程） |
 | `ANIPICK_CRAWL_TYPES` | `1,2,3,4,6` | 抓取类型 |
 | `ANIPICK_CRAWL_PAGE_SIZE` | `100` | 每页条数（10–100） |
 | `ANIPICK_CRAWL_DELAY_MS` | `350` | 请求间隔 |
@@ -287,6 +288,8 @@ docker compose up -d
 | `POST /api/admin/metrics/reset` | 清零性能统计（重新开始累计） |
 
 **不存在** `/api/bgm/*`、`/api/img`、用户凭证接收或 OAuth 兑换接口。
+
+公开 GET 端点（subjects / meta / tags / meta-tags）响应带 `Cache-Control: public, max-age=30`：浏览器 30s 内复用；配合 Cloudflare 的 Cache Rule（对上述路径开启缓存、Edge TTL 尊重源站）可让热门列表请求完全被边缘吸收，源站只处理首跳。管理端与错误响应保持 no-store。
 
 ## 目录结构
 
