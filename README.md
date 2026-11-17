@@ -43,6 +43,130 @@ bash scripts/build.sh
 
 首次部署后请立即修改管理员密码，并在反向代理 / 防火墙层限制 `/admin` 与 `/api/admin/*` 的访问来源。
 
+## Docker Compose 部署
+
+仓库自带 [`docker-compose.yml`](docker-compose.yml)：一个 AniPick 容器 + 一个 PostgreSQL 17 容器，数据库数据保存在 `pgdata` volume。
+
+### 最简方式（PostgreSQL 自备）
+
+只跑应用容器，数据库用你自己的：
+
+```yaml
+services:
+  anipick:
+    image: ghcr.io/meehua/ani-pick:latest
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      ANIPICK_DATABASE_URL: "postgres://USER:PASS@HOST:5432/DB?sslmode=disable"
+      ANIPICK_ADMIN_PASSWORD: "change-me"
+      ANIPICK_SECRET: "change-me"
+    # 数据库在宿主机时取消这两行注释
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+```
+
+保存为 `compose.simple.yml` 后：
+
+```bash
+docker compose -f compose.simple.yml up -d
+```
+
+也可以直接用命令：
+
+```bash
+docker run -d --name anipick --restart unless-stopped -p 8787:8787 \
+  --add-host=host.docker.internal:host-gateway \
+  -e ANIPICK_DATABASE_URL='postgres://USER:PASS@host.docker.internal:5432/DB?sslmode=disable' \
+  -e ANIPICK_ADMIN_PASSWORD='change-me' \
+  -e ANIPICK_SECRET='change-me' \
+  ghcr.io/meehua/ani-pick:latest
+```
+
+数据库和用户提前建好，容器启动时自动建表；访问 `/admin` 初始化抓取即可。
+
+
+### 1. 准备配置
+
+```bash
+cp .env.example .env
+```
+
+至少修改：
+
+```dotenv
+ANIPICK_ADMIN_PASSWORD=改成强密码
+ANIPICK_SECRET=改成长随机字符串
+POSTGRES_PASSWORD=改成数据库密码
+```
+
+可选：`ANIPICK_BGM_TOKEN`（站长抓取凭据）、`ANIPICK_EGRESS_PROXY`（仅服务端抓取代理）、`ANIPICK_PORT`（默认 8787）。
+
+Compose 会读取 `.env` 做变量替换，但会**覆盖** `ANIPICK_DATABASE_URL` 为 `postgres://ani_pick:...@postgres:5432/ani_pick`；`.env` 里的 `127.0.0.1` 只用于裸机运行，容器内不要使用。
+
+### 2. 启动
+
+```bash
+docker compose up -d
+docker compose logs -f anipick
+```
+
+首次启动会自动建表并写入管理员密码。访问：
+
+- 站点：http://localhost:8787
+- 后台：http://localhost:8787/admin
+
+然后在后台「抓取」里执行一次全量抓取，或先在「设置」里填站长凭据。
+
+### 3. 更新
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+指定版本：
+
+```bash
+ANIPICK_IMAGE_TAG=1.0.0 docker compose up -d
+```
+
+镜像来自 GHCR；首次发布后如果 package 是私有的，需要在 GitHub Package 设置里改为 public。
+
+### 4. 备份与恢复
+
+```bash
+# 备份
+docker compose exec -T postgres pg_dump -U ani_pick ani_pick > anipick.sql
+
+# 恢复（会覆盖现有数据，先停应用）
+docker compose stop anipick
+cat anipick.sql | docker compose exec -T postgres psql -U ani_pick -d ani_pick
+docker compose start anipick
+```
+
+### 5. 本地源码构建镜像
+
+如果不想用 GHCR 镜像，在 `docker-compose.yml` 里注释 `image:`，取消 `build: .` 注释：
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+### Compose 相关变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `POSTGRES_PASSWORD` | `ani_pick` | 数据库密码；不要使用 URL 特殊字符 |
+| `ANIPICK_PORT` | `8787` | 宿主机端口 |
+| `ANIPICK_IMAGE` | `ghcr.io/meehua/ani-pick` | 镜像地址 |
+| `ANIPICK_IMAGE_TAG` | `latest` | 镜像标签 |
+| `ANIPICK_EGRESS_PROXY` | — | 仅服务端抓取代理，例如 `http://host.docker.internal:7890` |
+
+> 服务端抓取需要代理时，`extra_hosts` 已配置 `host.docker.internal:host-gateway`；访客请求不会经过服务端，也不受这个代理影响。
+
 ## 工作原理
 
 ```
