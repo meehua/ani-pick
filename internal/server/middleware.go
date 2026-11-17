@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
-	return s.recoverer(s.securityHeaders(s.generalLimit(s.logRequests(next))))
+	return s.recoverer(s.securityHeaders(s.generalLimit(s.logRequests(s.gzipResponse(next)))))
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {

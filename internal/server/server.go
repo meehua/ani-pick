@@ -120,6 +120,10 @@ func (s *Server) spa() http.Handler {
 		if _, err := fs.Stat(s.static, name); err == nil {
 			if strings.HasPrefix(name, "assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				// 静态产物压缩结果已缓存：直接回 gzip 字节，绕过逐次压缩
+				if s.serveGzippedAsset(w, r, name) {
+					return
+				}
 			} else {
 				w.Header().Set("Cache-Control", "no-cache")
 			}
