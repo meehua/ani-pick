@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,14 @@ type Server struct {
 	pageMu    sync.Mutex
 	pageCache map[string]cachedJSON
 
+	// 标签候选与条目详情的结果缓存（数据只在抓取/管理操作后变化）
+	tagMu    sync.Mutex
+	tagCache map[string]cachedJSON
+	detailMu    sync.Mutex
+	detailCache map[string]cachedJSON
+
+	flights flightGroup
+
 	m *metrics
 }
 
@@ -72,7 +81,7 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 	if ver == "" {
 		ver = "dev"
 	}
-	return &Server{
+	s := &Server{
 		store:          st,
 		crawler:        cw,
 		defaults:       defaults,
@@ -84,10 +93,17 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 		egressProxy:    opts.EgressProxy,
 		metaTags:       map[string]cachedMetaTags{},
 		pageCache:      map[string]cachedJSON{},
+		tagCache:       map[string]cachedJSON{},
+		detailCache:    map[string]cachedJSON{},
 		clientIPHeader: strings.TrimSpace(opts.ClientIPHeader),
 		trustedCIDRs:   opts.TrustedProxyCIDRs,
 		m:              newMetrics(),
-	}, nil
+	}
+	// 抓取收尾时失效公开查询缓存（增量逐批写入，失败/取消也要失效）
+	if cw != nil {
+		cw.OnRunFinished = s.invalidateQueryCaches
+	}
+	return s, nil
 }
 
 func (s *Server) bgmClient(settings store.AppSettings) *bgm.Client {
@@ -139,6 +155,29 @@ func (s *Server) invalidateOverview() {
 	s.overviewMu.Lock()
 	s.overview = cachedJSON{}
 	s.overviewMu.Unlock()
+}
+
+// invalidateQueryCaches 失效全部公开查询结果缓存（抓取结束/管理端删改条目后调用）。
+// 搜索页/总数/标签候选/详情缓存的数据只在抓取与条目级操作后变化，
+// 靠显式失效保持新鲜，TTL 只作兜底，因此可以放到 60s 省下弱机上的重复查询。
+func (s *Server) invalidateQueryCaches() {
+	s.pageMu.Lock()
+	s.pageCache = map[string]cachedJSON{}
+	s.pageMu.Unlock()
+	s.tagMu.Lock()
+	s.tagCache = map[string]cachedJSON{}
+	s.tagMu.Unlock()
+	s.detailMu.Lock()
+	s.detailCache = map[string]cachedJSON{}
+	s.detailMu.Unlock()
+	s.store.InvalidateCounts()
+}
+
+// invalidateSubject 失效单个条目的详情缓存（管理端刷新/删除后调用）。
+func (s *Server) invalidateSubject(id int64) {
+	s.detailMu.Lock()
+	delete(s.detailCache, strconv.FormatInt(id, 10))
+	s.detailMu.Unlock()
 }
 
 func (s *Server) spa() http.Handler {

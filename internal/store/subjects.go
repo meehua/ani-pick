@@ -18,8 +18,9 @@ const subjectColumns = `s.id, s.type, s.name, s.name_cn, COALESCE(to_char(s.date
 	s.nsfw, s.meta_tags, s.image, s.tags_total, s.locked, s.fetched_at`
 
 // 搜索总数缓存：翻页复用同一 count，上限防止关键词型 key 无界增长。
+// TTL 只是兜底，抓取结束/删除条目时由 InvalidateCounts 主动失效。
 const (
-	searchCountTTL     = 30 * time.Second
+	searchCountTTL     = 60 * time.Second
 	searchCountMaxKeys = 256
 )
 

@@ -29,6 +29,15 @@ func WithTrace(ctx context.Context) (context.Context, *RequestTrace) {
 	return context.WithValue(ctx, traceKey{}, t), t
 }
 
+// ContextWithTrace 把已有累积器挂到新上下文：单飞合并的共享查询用脱离请求的
+// 后台 ctx 执行（leader 取消不连坐 follower），靠本函数保留面板的 DB 归属。
+func ContextWithTrace(ctx context.Context, t *RequestTrace) context.Context {
+	if t == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, traceKey{}, t)
+}
+
 // TraceFrom 取出累积器；未注入时返回 nil，调用方需 nil 安全。
 func TraceFrom(ctx context.Context) *RequestTrace {
 	t, _ := ctx.Value(traceKey{}).(*RequestTrace)

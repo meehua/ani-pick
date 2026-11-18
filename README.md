@@ -291,7 +291,19 @@ docker compose up -d
 
 **不存在** `/api/bgm/*`、`/api/img`、用户凭证接收或 OAuth 兑换接口。
 
-公开 GET 端点（subjects / meta / tags / meta-tags）响应带 `Cache-Control: public, max-age=30`：浏览器 30s 内复用；配合 Cloudflare 的 Cache Rule（对上述路径开启缓存、Edge TTL 尊重源站）可让热门列表请求完全被边缘吸收，源站只处理首跳。管理端与错误响应保持 no-store。
+公开 GET 端点（subjects / meta / tags / meta-tags / subjects/{id}）响应带 `Cache-Control: public, max-age=30`：浏览器 30s 内复用；配合 Cloudflare 的 Cache Rule（对上述路径开启缓存、Edge TTL 尊重源站）可让热门列表请求完全被边缘吸收，源站只处理首跳。管理端与错误响应保持 no-store。
+
+服务端在进程内再做一层结果缓存（数据只在抓取与管理端删改条目后变化）：
+
+| 缓存 | TTL | 失效时机 |
+| --- | --- | --- |
+| 搜索页结果（多键） | 60s | 抓取收尾 / 管理端删改条目，全量清空 |
+| 搜索总数 count（多键） | 60s | 同上 |
+| 标签候选 `/api/tags`（多键） | 60s | 同上 |
+| 条目详情 `/api/subjects/{id}`（按 id，上限 256 键） | 60s | 抓取收尾全量清空；刷新按 id、删除全量 |
+| 元标签候选 `/api/meta-tags` | 10min | 同标签候选 |
+
+缓存未命中经单飞合并：同一键的并发回源只放一个进数据库，其余共享首份结果（TTL 到期瞬间 / 冷启动的重复请求只查一次库）。查询在脱离请求的后台 ctx 上执行——发起者的客户端断开不会让等待者一起失败，请求链路的 DB 计时归属保留。
 
 ## 目录结构
 

@@ -14,6 +14,9 @@ services:
       - shared_buffers=${PG_SHARED_BUFFERS:-128MB}
       - -c
       - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-256MB}
+      # 站点全是毫秒级短查询，JIT 编译开销大于收益（2 核超售机上每次语句都白烧 CPU）
+      - -c
+      - jit=off
     environment:
       POSTGRES_DB: ani_pick
       POSTGRES_USER: ani_pick

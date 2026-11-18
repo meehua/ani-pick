@@ -33,6 +33,14 @@ func New(pool *pgxpool.Pool, box *secretbox.Box) *Store {
 	}
 }
 
+// InvalidateCounts 清空搜索总数缓存（抓取结束/删除条目后调用），
+// 避免 60s TTL 内新条目不进总数。
+func (s *Store) InvalidateCounts() {
+	s.countMu.Lock()
+	s.countCache = map[string]countEntry{}
+	s.countMu.Unlock()
+}
+
 // TagVote 是某个标签在单个条目中的票数与占比（百分比，0-100）。
 type TagVote struct {
 	Name  string  `json:"name"`

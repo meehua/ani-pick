@@ -264,6 +264,8 @@ func (s *Server) handleAdminRefreshSubject(w http.ResponseWriter, r *http.Reques
 		fail(w, http.StatusBadGateway, "refresh_failed", "刷新失败", err.Error())
 		return
 	}
+	s.invalidateSubject(id)
+	s.invalidateQueryCaches()
 	s.invalidateOverview()
 	writeJSON(w, http.StatusOK, sub)
 }
@@ -282,6 +284,7 @@ func (s *Server) handleAdminDeleteSubject(w http.ResponseWriter, r *http.Request
 		internalError(w, err)
 		return
 	}
+	s.invalidateQueryCaches()
 	s.invalidateOverview()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

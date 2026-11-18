@@ -54,6 +54,10 @@ type Crawler struct {
 	defaults   store.AppSettings
 	httpClient *http.Client
 
+	// OnRunFinished 在每轮抓取收尾时回调（无论 done/failed/canceled），
+	// 服务层用它失效查询结果缓存——条目/标签数据只在抓取中变化。
+	OnRunFinished func()
+
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	state  State
@@ -136,6 +140,10 @@ func (c *Crawler) run(ctx context.Context, runID int64, mode string, settings st
 		c.state.Progress = finished
 		c.cancel = nil
 		c.mu.Unlock()
+		// 失败/取消同样可能已写入部分条目（增量逐批提交），一律失效查询缓存
+		if c.OnRunFinished != nil {
+			c.OnRunFinished()
+		}
 	}()
 
 	update := func(phase, msg string) {
