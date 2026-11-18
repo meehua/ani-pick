@@ -13,7 +13,6 @@ import { Pagination, PaginationContent, PaginationItem } from '@/components/ui/p
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PosterCard, DenseRow, SubjectTable } from '@/components/subject-views'
 import { SearchInput } from '@/components/search-input'
-import { ScrollArea } from '@/components/scroll-area'
 import {
   ActiveFilters, FilterPanel, FilterSheet, type ActiveFilterState, type PatchFn,
 } from '@/components/filters'
@@ -304,7 +303,7 @@ export default function BrowsePage() {
       <div className="flex gap-6">
         {!collapsed && (
           <aside ref={asideRef} className="hidden w-64 shrink-0 lg:block">
-            <ScrollArea className="sticky top-20 max-h-[calc(100dvh-6rem)] rounded-xl border bg-card">
+            <div className="scrollbar-none sticky top-20 max-h-[calc(100dvh-6rem)] overflow-y-auto rounded-xl border bg-card">
               <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-card px-4 py-3">
                 <h2 className="text-sm font-semibold">筛选</h2>
                 <div className="flex items-center gap-2">
@@ -335,7 +334,7 @@ export default function BrowsePage() {
               <div className="p-4">
                 <FilterPanel filters={filters} patch={patch} metaTagOptions={metaTags} />
               </div>
-            </ScrollArea>
+            </div>
           </aside>
         )}
 

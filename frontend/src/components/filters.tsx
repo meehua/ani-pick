@@ -482,7 +482,7 @@ export function FilterSheet({
           </SheetDescription>
         </SheetHeader>
 
-        <div className="scrollbar-thin flex-1 overflow-y-auto p-4">
+        <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto p-4">
           <FilterPanel
             filters={filters}
             patch={patch}

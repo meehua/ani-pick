@@ -231,13 +231,18 @@
     background-clip: padding-box;
   }
 
-  /* 完全隐藏原生滚动条：交给 ScrollArea 的自绘指示拇指（不占布局宽度）。 */
+  /* 直接隐藏原生滚动条：滚动交互全保留，只是没有视觉滚动条。
+     三重保险——标准属性、旧 IE 属性、WebKit 伪元素（新版 Chrome 的 Fluent
+     overlay 模式可能忽略伪元素样式，前两条仍生效）。 */
   .scrollbar-none {
     scrollbar-width: none;
+    -ms-overflow-style: none;
   }
 
   .scrollbar-none::-webkit-scrollbar {
     display: none;
+    width: 0;
+    height: 0;
   }
 }
 
