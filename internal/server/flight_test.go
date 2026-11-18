@@ -10,16 +10,16 @@ import (
 	"anipick/internal/store"
 )
 
-// TestFlightGroupDedup 并发同键回源只放一个进 fn，其余等待共享结果。
+// TestFlightGroupDedup 并发同键回源只放一个进 fn（leader），其余等待共享结果并计为 merged。
 func TestFlightGroupDedup(t *testing.T) {
 	var g flightGroup
-	var calls atomic.Int64
+	var calls, leaders, mergedN atomic.Int64
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			body, err := g.do("k", func() ([]byte, error) {
+			body, err, merged := g.do("k", func() ([]byte, error) {
 				calls.Add(1)
 				time.Sleep(20 * time.Millisecond) // 放大竞态窗口
 				return []byte("ok"), nil
@@ -30,11 +30,22 @@ func TestFlightGroupDedup(t *testing.T) {
 			if string(body) != "ok" {
 				t.Errorf("flight 返回内容不对: %q", body)
 			}
+			if merged {
+				mergedN.Add(1)
+			} else {
+				leaders.Add(1)
+			}
 		}()
 	}
 	wg.Wait()
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("同键回源应只执行 1 次，实际 %d 次", n)
+	}
+	if n := leaders.Load(); n != 1 {
+		t.Errorf("leader 应恰为 1 个，实际 %d", n)
+	}
+	if n := mergedN.Load(); n != 31 {
+		t.Errorf("等待者应全部计为 merged，实际 %d/31", n)
 	}
 }
 
@@ -48,7 +59,7 @@ func TestFlightGroupError(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = g.do("k", func() ([]byte, error) { return nil, wantErr })
+			_, errs[i], _ = g.do("k", func() ([]byte, error) { return nil, wantErr })
 		}()
 	}
 	wg.Wait()

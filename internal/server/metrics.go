@@ -50,6 +50,7 @@ type metrics struct {
 	routes  map[string]*routeStat
 	recent  []reqRecord
 	recentN int
+	cache   map[string]cacheKindStat
 }
 
 func newMetrics() *metrics {
@@ -57,7 +58,33 @@ func newMetrics() *metrics {
 		started: time.Now(),
 		routes:  map[string]*routeStat{},
 		recent:  make([]reqRecord, recentCap),
+		cache:   map[string]cacheKindStat{},
 	}
+}
+
+// cacheKindStat 单类查询缓存的计数：hit=直接以缓存应答；origin=未命中回源
+// （leader 实际查库并编码）；merged=单飞合并掉的并发重复请求（follower 复用
+// leader 结果，未触碰缓存与数据库）。
+type cacheKindStat struct {
+	Hits   int `json:"hits"`
+	Origin int `json:"origin"`
+	Merged int `json:"merged"`
+}
+
+// cacheEvent 记录一次缓存事件；kind 是缓存种类（search/detail/tags/meta-tags/meta/overview）。
+func (m *metrics) cacheEvent(kind, event string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cs := m.cache[kind]
+	switch event {
+	case "hit":
+		cs.Hits++
+	case "origin":
+		cs.Origin++
+	case "merged":
+		cs.Merged++
+	}
+	m.cache[kind] = cs
 }
 
 func (m *metrics) record(route string, status int, dur, dbT, gzipT time.Duration, bytes int64) {
@@ -111,10 +138,11 @@ type RouteMetrics struct {
 }
 
 type metricsSnapshot struct {
-	Since   time.Time      `json:"since"`
-	UptimeS int64          `json:"uptime_s"`
-	Routes  []RouteMetrics `json:"routes"`
-	Recent  []reqRecord    `json:"recent"`
+	Since   time.Time                `json:"since"`
+	UptimeS int64                    `json:"uptime_s"`
+	Routes  []RouteMetrics           `json:"routes"`
+	Recent  []reqRecord              `json:"recent"`
+	Cache   map[string]cacheKindStat `json:"cache"`
 }
 
 func (m *metrics) snapshot() metricsSnapshot {
@@ -125,6 +153,10 @@ func (m *metrics) snapshot() metricsSnapshot {
 		UptimeS: int64(time.Since(m.started).Seconds()),
 		Routes:  make([]RouteMetrics, 0, len(m.routes)),
 		Recent:  make([]reqRecord, 0, min(m.recentN, recentCap)),
+		Cache:   make(map[string]cacheKindStat, len(m.cache)),
+	}
+	for k, v := range m.cache {
+		out.Cache[k] = v
 	}
 	for route, rs := range m.routes {
 		rs.mu.Lock()
@@ -158,6 +190,7 @@ func (m *metrics) reset() {
 	m.routes = map[string]*routeStat{}
 	m.recent = make([]reqRecord, recentCap)
 	m.recentN = 0
+	m.cache = map[string]cacheKindStat{}
 	m.started = time.Now()
 }
 

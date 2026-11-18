@@ -26,9 +26,11 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	body, fresh := s.overview, time.Since(s.overview.at) < overviewCacheTTL
 	s.overviewMu.Unlock()
 	if fresh && body.body != nil {
+		s.m.cacheEvent("overview", "hit")
 		writeJSONBytes(w, http.StatusOK, body.body)
 		return
 	}
+	s.m.cacheEvent("overview", "origin")
 
 	// 三路查询相互独立，并行执行缩短缓存未命中时的聚合耗时（省 IO 等待，不增总 CPU）
 	var (

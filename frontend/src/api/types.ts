@@ -192,11 +192,19 @@ export interface MetricsRequest {
   bytes: number
 }
 
+// 单类查询缓存的计数：hit=直接以缓存应答；origin=未命中回源；merged=单飞合并的并发重复请求。
+export interface CacheKindStat {
+  hits: number
+  origin: number
+  merged: number
+}
+
 export interface MetricsSnapshot {
   since: string
   uptime_s: number
   routes: RouteMetrics[]
   recent: MetricsRequest[]
+  cache: Record<string, CacheKindStat>
 }
 
 // ---------- Bangumi 直连 ----------

@@ -16,7 +16,9 @@ type flightCall struct {
 	err  error
 }
 
-func (g *flightGroup) do(key string, fn func() ([]byte, error)) ([]byte, error) {
+// do 合并并发的同键回源。返回值多带 merged：本次调用是否为等待方——等待方直接
+// 复用 leader 的结果，未触碰缓存与数据库，性能面板按此统计合并省下的回源次数。
+func (g *flightGroup) do(key string, fn func() ([]byte, error)) ([]byte, error, bool) {
 	g.mu.Lock()
 	if g.calls == nil {
 		g.calls = map[string]*flightCall{}
@@ -24,7 +26,7 @@ func (g *flightGroup) do(key string, fn func() ([]byte, error)) ([]byte, error) 
 	if c, ok := g.calls[key]; ok {
 		g.mu.Unlock()
 		<-c.done
-		return c.body, c.err
+		return c.body, c.err, true
 	}
 	c := &flightCall{done: make(chan struct{})}
 	g.calls[key] = c
@@ -37,5 +39,5 @@ func (g *flightGroup) do(key string, fn func() ([]byte, error)) ([]byte, error) 
 	g.mu.Lock()
 	delete(g.calls, key)
 	g.mu.Unlock()
-	return c.body, c.err
+	return c.body, c.err, false
 }

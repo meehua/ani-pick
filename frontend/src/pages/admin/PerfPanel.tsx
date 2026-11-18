@@ -42,6 +42,16 @@ const SORT_LABEL: Record<SortKey, string> = {
   max_ms: '最大 ms',
 }
 
+// 缓存种类 → 展示名（与后端 metrics.go 的 cacheEvent kind 对应）。
+const CACHE_LABEL: Record<string, string> = {
+  search: '搜索页',
+  detail: '条目详情',
+  tags: '标签候选',
+  'meta-tags': '分类标签',
+  meta: '站点元信息',
+  overview: '抓取概览',
+}
+
 function StatusBadge({ status }: { status: number }) {
   return (
     <Badge
@@ -88,6 +98,15 @@ export function PerfPanel({
   const bucketCount = (b: '2' | '4' | '5') =>
     recent.filter(rq => Math.floor(rq.status / 100) === Number(b)).length
 
+  // 缓存计数随「显示 admin 路由」之外的口径独立统计（overview 属于 admin 但单独成类）。
+  const cacheKinds = Object.entries(metrics?.cache ?? {}).filter(
+    ([, v]) => v.hits + v.origin + v.merged > 0,
+  )
+  const cacheHits = cacheKinds.reduce((s, [, v]) => s + v.hits, 0)
+  const cacheOrigin = cacheKinds.reduce((s, [, v]) => s + v.origin, 0)
+  const cacheMerged = cacheKinds.reduce((s, [, v]) => s + v.merged, 0)
+  const hitRate = cacheHits + cacheOrigin > 0 ? (cacheHits / (cacheHits + cacheOrigin)) * 100 : null
+
   if (!metrics) {
     return (
       <p className="py-14 text-center text-sm text-muted-foreground">
@@ -115,6 +134,7 @@ export function PerfPanel({
         uptime_s: metrics.uptime_s,
         routes: metrics.routes,
         recent: metrics.recent,
+        cache: metrics.cache,
       },
       null,
       2,
@@ -135,6 +155,11 @@ export function PerfPanel({
       ...filtered.map(r =>
         [r.at, csvEscape(r.route), r.status, r.ms, r.db_ms, r.gzip_ms, r.bytes].join(','),
       ),
+    ].join('\n')
+  const cacheCsv = () =>
+    [
+      'kind,hits,origin,merged',
+      ...cacheKinds.map(([k, v]) => `${k},${v.hits},${v.origin},${v.merged}`),
     ].join('\n')
   const copyText = async (text: string) => {
     try {
@@ -200,6 +225,9 @@ export function PerfPanel({
                 <DropdownMenuItem className="gap-2" onClick={() => void copyText(recentCsv())}>
                   最近请求 CSV
                 </DropdownMenuItem>
+                <DropdownMenuItem className="gap-2" onClick={() => void copyText(cacheCsv())}>
+                  查询缓存 CSV
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Button type="button" variant="outline" size="sm" onClick={onRefresh} className="gap-1.5">
@@ -221,7 +249,7 @@ export function PerfPanel({
         </div>
 
         {/* 统计 KPI：随过滤联动 */}
-        <div className="grid grid-cols-2 gap-2 px-4 pb-2 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 px-4 pb-2 sm:grid-cols-3 lg:grid-cols-5">
           <div className="rounded-lg bg-muted/50 px-3 py-2">
             <p className="text-[11px] text-muted-foreground">总请求</p>
             <p className="num mt-1 text-lg font-semibold leading-none">{fmtNum(totalReq)}</p>
@@ -258,6 +286,15 @@ export function PerfPanel({
             </p>
             <p className="mt-1.5 truncate text-[11px] text-muted-foreground">
               最近 {filtered.length} 条样本
+            </p>
+          </div>
+          <div className="rounded-lg bg-muted/50 px-3 py-2">
+            <p className="text-[11px] text-muted-foreground">缓存命中率</p>
+            <p className="num mt-1 text-lg font-semibold leading-none">
+              {hitRate !== null ? `${hitRate.toFixed(1)}%` : '—'}
+            </p>
+            <p className="mt-1.5 truncate text-[11px] text-muted-foreground">
+              命中 {fmtNum(cacheHits)} · 回源 {fmtNum(cacheOrigin)} · 合并 {fmtNum(cacheMerged)}
             </p>
           </div>
         </div>
@@ -344,6 +381,80 @@ export function PerfPanel({
         <p className="border-t px-4 py-2 text-[11px] text-muted-foreground">
           总耗时 ≈ DB + gzip + 处理与编码；大小为走线字节（已含压缩效果）。
         </p>
+      </Panel>
+
+      <Panel
+        title="查询缓存"
+        desc="hit=直接以缓存应答 · origin=未命中回源 · merged=单飞合并的并发重复请求"
+        flush
+      >
+        {cacheKinds.length === 0 ? (
+          <p className="py-10 text-center text-sm text-muted-foreground">暂无缓存请求</p>
+        ) : (
+          <>
+            <Table containerClassName="scrollbar-thin hidden sm:block" className="min-w-[560px]">
+              <TableHeader>
+                <TableRow>
+                  <Th className="px-4">缓存</Th>
+                  <Th right>命中</Th>
+                  <Th right>回源</Th>
+                  <Th right>合并</Th>
+                  <Th right className="px-4">
+                    命中率
+                  </Th>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {cacheKinds.map(([kind, v]) => {
+                  const rate =
+                    v.hits + v.origin > 0 ? (v.hits / (v.hits + v.origin)) * 100 : null
+                  return (
+                    <TableRow key={kind}>
+                      <Td className="px-4 font-medium">{CACHE_LABEL[kind] ?? kind}</Td>
+                      <Td className="num text-right">{fmtNum(v.hits)}</Td>
+                      <Td className="num text-right text-muted-foreground">{fmtNum(v.origin)}</Td>
+                      <Td
+                        className={cn(
+                          'num text-right',
+                          v.merged > 0 ? 'text-foreground' : 'text-muted-foreground',
+                        )}
+                      >
+                        {fmtNum(v.merged)}
+                      </Td>
+                      <Td className="px-4 text-right">
+                        <span className="num">{rate === null ? '—' : `${rate.toFixed(1)}%`}</span>
+                        {rate !== null && (
+                          <div className="ml-auto mt-1 h-1 w-16 rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-primary/70"
+                              style={{ width: `${rate}%` }}
+                            />
+                          </div>
+                        )}
+                      </Td>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+
+            <MobileRows
+              rows={cacheKinds.map(([kind, v]) => {
+                const rate = v.hits + v.origin > 0 ? (v.hits / (v.hits + v.origin)) * 100 : null
+                return {
+                  key: kind,
+                  head: <span className="text-xs font-medium">{CACHE_LABEL[kind] ?? kind}</span>,
+                  stats: [
+                    <span key="h">命中 {fmtNum(v.hits)}</span>,
+                    <span key="o">回源 {fmtNum(v.origin)}</span>,
+                    <span key="m">合并 {fmtNum(v.merged)}</span>,
+                    <span key="r">{rate === null ? '—' : `${rate.toFixed(1)}%`}</span>,
+                  ],
+                }
+              })}
+            />
+          </>
+        )}
       </Panel>
 
       <Panel

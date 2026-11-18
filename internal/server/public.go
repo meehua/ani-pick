@@ -140,6 +140,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if e, ok := s.pageCache[key]; ok && time.Since(e.at) < queryTTL {
 		body := e.body
 		s.pageMu.Unlock()
+		s.m.cacheEvent("search", "hit")
 		writeJSONTTL(w, http.StatusOK, body, publicTTL)
 		return
 	}
@@ -148,7 +149,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// 缓存未命中：经单飞合并并发的同键回源（TTL 到期瞬间的重复请求只查一次库）。
 	// 查询用独立超时的后台 ctx——leader 客户端断开不应让等待中的 follower 一起失败；
 	// 请求链路的 DB 计时累积器挂到后台 ctx，性能面板的 DB 归属不丢（follower 同享）。
-	body, err := s.flights.do("search:"+key, func() ([]byte, error) {
+	body, err, merged := s.flights.do("search:"+key, func() ([]byte, error) {
 		tr := db.TraceFrom(r.Context())
 		ctx, cancel := context.WithTimeout(db.ContextWithTrace(context.Background(), tr), 25*time.Second)
 		defer cancel()
@@ -168,6 +169,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.pageMu.Unlock()
 		return payload, nil
 	})
+	if merged {
+		s.m.cacheEvent("search", "merged")
+	} else {
+		s.m.cacheEvent("search", "origin")
+	}
 	if err != nil {
 		internalError(w, err)
 		return
@@ -187,13 +193,14 @@ func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
 	if e, ok := s.detailCache[key]; ok && time.Since(e.at) < queryTTL {
 		body := e.body
 		s.detailMu.Unlock()
+		s.m.cacheEvent("detail", "hit")
 		writeJSONTTL(w, http.StatusOK, body, publicTTL)
 		return
 	}
 	s.detailMu.Unlock()
 
 	// 单飞合并同 id 并发回源；404 不缓存——条目可能随下次抓取入库
-	body, err := s.flights.do("detail:"+key, func() ([]byte, error) {
+	body, err, merged := s.flights.do("detail:"+key, func() ([]byte, error) {
 		tr := db.TraceFrom(r.Context())
 		ctx, cancel := context.WithTimeout(db.ContextWithTrace(context.Background(), tr), 10*time.Second)
 		defer cancel()
@@ -203,6 +210,11 @@ func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
 		}
 		return json.Marshal(sub)
 	})
+	if merged {
+		s.m.cacheEvent("detail", "merged")
+	} else {
+		s.m.cacheEvent("detail", "origin")
+	}
 	if err == store.ErrNotFound {
 		fail(w, http.StatusNotFound, "not_indexed", "本站索引中没有这个条目", "可在管理后台手动刷新，或等待抓取任务覆盖")
 		return
@@ -231,6 +243,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 	if e, ok := s.tagCache[key]; ok && time.Since(e.at) < queryTTL {
 		body := e.body
 		s.tagMu.Unlock()
+		s.m.cacheEvent("tags", "hit")
 		writeJSONTTL(w, http.StatusOK, body, publicTTL)
 		return
 	}
@@ -238,7 +251,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 
 	// 标签候选是搜索框逐键请求的高频端点（每键一次查询），必须进程内缓存；
 	// 数据只在抓取后随 RecomputeTagUsage 变化，失效挂抓取收尾钩子，TTL 兜底。
-	body, err := s.flights.do("tags:"+key, func() ([]byte, error) {
+	body, err, merged := s.flights.do("tags:"+key, func() ([]byte, error) {
 		tr := db.TraceFrom(r.Context())
 		ctx, cancel := context.WithTimeout(db.ContextWithTrace(context.Background(), tr), 10*time.Second)
 		defer cancel()
@@ -258,6 +271,11 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		s.tagMu.Unlock()
 		return payload, nil
 	})
+	if merged {
+		s.m.cacheEvent("tags", "merged")
+	} else {
+		s.m.cacheEvent("tags", "origin")
+	}
 	if err != nil {
 		internalError(w, err)
 		return
@@ -297,10 +315,12 @@ func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 	if e, ok := s.metaTags[key]; ok && time.Since(e.at) < metaTagsTTL {
 		data := e.data
 		s.cacheMu.Unlock()
+		s.m.cacheEvent("meta-tags", "hit")
 		writeJSONTTL(w, http.StatusOK, mustMarshalItems(data), publicTTL)
 		return
 	}
 	s.cacheMu.Unlock()
+	s.m.cacheEvent("meta-tags", "origin")
 
 	items, err := s.store.MetaTagSuggest(r.Context(), typ, limit)
 	if err != nil {
@@ -333,9 +353,11 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	body, fresh := s.metaBody, time.Since(s.metaBody.at) < metaCacheTTL
 	s.metaMu.Unlock()
 	if fresh && body.body != nil {
+		s.m.cacheEvent("meta", "hit")
 		writeJSONTTL(w, http.StatusOK, body.body, publicTTL)
 		return
 	}
+	s.m.cacheEvent("meta", "origin")
 
 	stats, err := s.store.Stats(r.Context())
 	if err != nil {
