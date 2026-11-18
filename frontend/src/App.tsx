@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { Link, Route, Routes, useLocation, useNavigationType, useSearchParams } from 'react-router-dom'
-import { Home, LayoutGrid, MonitorSmartphone, Moon, Sun, Trophy, UserRound } from 'lucide-react'
+import { Contrast, Home, LayoutGrid, Moon, Sun, Trophy, UserRound } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { UserAvatar } from '@/components/user-avatar'
@@ -41,19 +41,33 @@ function ScrollManager() {
 
 function ThemeSwitch() {
   const { theme, setTheme } = useTheme()
+  const openedByPointer = useRef(false)
   const items: { value: Theme; label: string; icon: ReactNode }[] = [
     { value: 'light', label: '浅色', icon: <Sun size={14} /> },
     { value: 'dark', label: '深色', icon: <Moon size={14} /> },
-    { value: 'system', label: '跟随系统', icon: <MonitorSmartphone size={14} /> },
+    { value: 'system', label: '跟随系统', icon: <Contrast size={14} /> },
   ]
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+      <DropdownMenuTrigger
+        asChild
+        onPointerDown={() => {
+          openedByPointer.current = true
+        }}
+      >
         <Button variant="ghost" size="icon" aria-label="切换主题" className="size-8">
-          {theme === 'light' ? <Sun size={15} /> : theme === 'dark' ? <Moon size={15} /> : <MonitorSmartphone size={15} />}
+          {theme === 'light' ? <Sun size={15} /> : theme === 'dark' ? <Moon size={15} /> : <Contrast size={15} />}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={e => {
+          // 鼠标/触控打开的菜单，关闭后不把焦点还给按钮——否则按钮上残留焦点光环；
+          // 键盘打开时保持默认回焦，保住 Tab 焦点位置。
+          if (openedByPointer.current) e.preventDefault()
+          openedByPointer.current = false
+        }}
+      >
         {items.map(it => (
           <DropdownMenuItem key={it.value} onClick={() => setTheme(it.value)} className="gap-2">
             {it.icon} {it.label}
