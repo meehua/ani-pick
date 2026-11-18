@@ -13,6 +13,7 @@ import { Pagination, PaginationContent, PaginationItem } from '@/components/ui/p
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PosterCard, DenseRow, SubjectTable } from '@/components/subject-views'
 import { SearchInput } from '@/components/search-input'
+import { ScrollArea } from '@/components/scroll-area'
 import {
   ActiveFilters, FilterPanel, FilterSheet, type ActiveFilterState, type PatchFn,
 } from '@/components/filters'
@@ -111,6 +112,28 @@ export default function BrowsePage() {
   const [metaTags, setMetaTags] = React.useState<TagStat[]>([])
   const dataRef = React.useRef<SearchResult | null>(null)
   dataRef.current = data
+  const asideRef = React.useRef<HTMLElement | null>(null)
+  const wasCollapsed = React.useRef(collapsed)
+
+  // 打开筛选面板时，把页面滚到面板完整可见处（顶部贴住吸顶线）。
+  // 面板 max-h 为 dvh-6rem，停在 top-20 吸顶线上时正好全高可见；
+  // 面板顶一旦高于吸顶线（顶部被视口上缘裁掉）就滚回来。
+  React.useEffect(() => {
+    if (wasCollapsed.current && !collapsed) {
+      const panel = asideRef.current?.firstElementChild
+      if (panel) {
+        const rect = panel.getBoundingClientRect()
+        const stickyTop = 80 // 与 top-20 一致
+        if (rect.top < stickyTop - 1) {
+          window.scrollTo({
+            top: Math.max(0, window.scrollY + rect.top - stickyTop),
+            behavior: 'smooth',
+          })
+        }
+      }
+    }
+    wasCollapsed.current = collapsed
+  }, [collapsed])
 
   useScrollMemory(location.key, mountHit?.scrollTop ?? null)
 
@@ -280,8 +303,8 @@ export default function BrowsePage() {
 
       <div className="flex gap-6">
         {!collapsed && (
-          <aside className="hidden w-64 shrink-0 lg:block">
-            <div className="sticky top-20 max-h-[calc(100dvh-6rem)] overflow-y-auto rounded-xl border bg-card">
+          <aside ref={asideRef} className="hidden w-64 shrink-0 lg:block">
+            <ScrollArea className="sticky top-20 max-h-[calc(100dvh-6rem)] rounded-xl border bg-card">
               <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-card px-4 py-3">
                 <h2 className="text-sm font-semibold">筛选</h2>
                 <div className="flex items-center gap-2">
@@ -312,7 +335,7 @@ export default function BrowsePage() {
               <div className="p-4">
                 <FilterPanel filters={filters} patch={patch} metaTagOptions={metaTags} />
               </div>
-            </div>
+            </ScrollArea>
           </aside>
         )}
 
