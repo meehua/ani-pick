@@ -19,8 +19,24 @@ function tagLine(s: Subject): string {
   return (s.tags ?? []).slice(0, 3).map(t => t.name).join(' · ')
 }
 
-// 网格：封面优先，图下两行信息，6 列铺满宽屏。
+// 网格：封面优先。右上角常驻「年份 · 类型」徽标（半透明深底保证可读）；悬停时封面
+// 下半部渐变遮罩浮现，集中展示评分 / 排名 / 标签占比 / 评分人数——评分做主视觉。
+// 封面下常驻标题与原名；悬停反馈：封面轻微缩放、标题下划线、遮罩浮现。
 export function PosterCard({ subject, priority = false }: { subject: Subject; priority?: boolean }) {
+  const fullName =
+    subject.name_cn && subject.name_cn !== subject.name
+      ? `${titleOf(subject)}（${subject.name}）`
+      : titleOf(subject)
+  const tagLine = subject.tags
+    ?.slice(0, 3)
+    .map(t => `${t.name} ${t.pct.toFixed(0)}%`)
+    .join(' · ')
+  const badge = [TYPE_LABEL[subject.type] ?? '其他', subject.date ? yearOf(subject.date) : '']
+    .filter(Boolean)
+    .join(' · ')
+  const hasOverlay =
+    subject.score > 0 || subject.rank > 0 || Boolean(tagLine) || subject.rating_total > 0
+
   return (
     <Link
       to={`/subject/${subject.id}`}
@@ -34,55 +50,43 @@ export function PosterCard({ subject, priority = false }: { subject: Subject; pr
           priority={priority}
           className="aspect-[5/7] w-full rounded-md border"
         />
-        <div className="pointer-events-none absolute inset-0 rounded-md bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
-        <span className="pointer-events-none absolute right-1.5 top-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-          {scoreOf(subject)} 分
+        <span className="num pointer-events-none absolute right-1.5 top-1.5 rounded bg-black/55 px-1.5 py-1 text-[11px] font-medium leading-none text-white/95 backdrop-blur-[2px]">
+          {badge}
         </span>
-        <span className="pointer-events-none absolute bottom-2 left-2 right-2 hidden text-[11px] font-medium text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100 sm:block">
-          查看条目
-        </span>
+        {hasOverlay && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 flex h-1/2 flex-col justify-end gap-1 rounded-b-md bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2.5 pb-2.5 pt-4 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+            {(subject.score > 0 || subject.rank > 0) && (
+              <p className="flex items-baseline gap-2">
+                {subject.score > 0 && (
+                  <span className="num text-xl font-semibold leading-none text-white">
+                    {scoreOf(subject)}
+                    <span className="ml-0.5 text-[11px] font-normal text-white/55">分</span>
+                  </span>
+                )}
+                {subject.rank > 0 && (
+                  <span className="num text-xs font-medium text-white/75">#{subject.rank}</span>
+                )}
+              </p>
+            )}
+            {tagLine && <p className="truncate text-[11px] leading-snug text-white/85">{tagLine}</p>}
+            {subject.rating_total > 0 && (
+              <p className="num truncate text-[11px] leading-snug text-white/55">
+                {fmtNum(subject.rating_total)} 人评分
+              </p>
+            )}
+          </div>
+        )}
       </div>
-      <h3 className="mt-2 line-clamp-2 text-sm font-medium leading-snug underline-offset-2 group-hover:underline">
+      <h3
+        className="mt-2 line-clamp-2 text-sm font-medium leading-snug underline-offset-2 group-hover:underline"
+        title={fullName}
+      >
         {titleOf(subject)}
       </h3>
       {subject.name_cn && subject.name_cn !== subject.name && (
-        <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{subject.name}</p>
-      )}
-      <p className="num mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-        <span>{yearOf(subject.date)}</span>
-        <span className="text-border">·</span>
-        <span>{TYPE_LABEL[subject.type] ?? '其他'}</span>
-        {subject.score > 0 && (
-          <>
-            <span className="text-border">·</span>
-            <span className="font-medium text-foreground">{scoreOf(subject)}</span>
-          </>
-        )}
-        {subject.rank > 0 && (
-          <>
-            <span className="text-border">·</span>
-            <span>#{subject.rank}</span>
-          </>
-        )}
-      </p>
-      {subject.rating_total > 0 && (
-        <p className="num mt-0.5 text-xs text-muted-foreground">
-          {fmtNum(subject.rating_total)} 人评分
+        <p className="mt-0.5 truncate text-xs text-muted-foreground" title={subject.name}>
+          {subject.name}
         </p>
-      )}
-      {subject.tags && subject.tags.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-1">
-          {subject.tags.slice(0, 3).map(t => (
-            <span
-              key={t.name}
-              className="inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
-              title={`${t.name}：${t.votes} 票，占该条目标签票数 ${t.pct.toFixed(1)}%`}
-            >
-              <span className="truncate">{t.name}</span>
-              <span className="tabular-nums opacity-70">{t.pct.toFixed(0)}%</span>
-            </span>
-          ))}
-        </div>
       )}
     </Link>
   )
