@@ -256,7 +256,11 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 	conds := []string{"TRUE"}
 
 	types := q.Types
-	if len(types) > 0 {
+	if len(types) == 1 {
+		// 单类型用直接等值：type = ANY 形式会让规划器放弃索引序（实测退回
+		// Seq Scan + 全量排序，排序索引全部失效），等值则完美命中排序索引
+		conds = append(conds, "s.type = "+ph(types[0]))
+	} else if len(types) > 0 {
 		conds = append(conds, "s.type = ANY("+ph(types)+")")
 	}
 
@@ -377,9 +381,17 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 	limitPh := ph(q.PageSize)
 	offsetPh := ph((q.Page - 1) * q.PageSize)
 
+	// 两段式组装：LIMIT/OFFSET 作用于纯索引的 id 窗口子查询，标签组装只对
+	// 窗口内的 PageSize 行做 LATERAL——否则深分页时 OFFSET 之前的每一行
+	// 都会做一次组装（实测第 5000 页 3.6s 的根因）。
 	pageSQL := `
 		SELECT ` + subjectColumns + `, COALESCE(tg.tags, '[]'::jsonb)
-		FROM subjects s
+		FROM (
+			SELECT s.id FROM subjects s WHERE ` + where + `
+			ORDER BY ` + orderBy + `
+			LIMIT ` + limitPh + ` OFFSET ` + offsetPh + `
+		) win
+		JOIN subjects s ON s.id = win.id
 		LEFT JOIN LATERAL (
 			SELECT jsonb_agg(jsonb_build_object('name', t.name, 'votes', x.votes, 'pct', x.pct)
 				ORDER BY x.votes DESC, t.name) AS tags
@@ -390,9 +402,7 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 			) x
 			JOIN tags t ON t.id = x.tag_id
 		) tg ON TRUE
-		WHERE ` + where + `
-		ORDER BY ` + orderBy + `
-		LIMIT ` + limitPh + ` OFFSET ` + offsetPh
+		ORDER BY ` + orderBy
 
 	var rows pgx.Rows
 	var qErr error
@@ -459,17 +469,26 @@ func (s *Store) TagSuggest(ctx context.Context, query string, types []int, limit
 	var rows pgx.Rows
 	var err error
 	if len(types) == 0 {
+		// 全类型汇总直查 tags 上的预聚合列（抓取后随 tag_usage 一并重算），
+		// 避免对 tag_usage 做全量 ILIKE 聚合
 		rows, err = s.Pool.Query(ctx, `
-			SELECT t.name, sum(tu.subject_count)::int, sum(tu.votes)::bigint
-			FROM tag_usage tu JOIN tags t ON t.id = tu.tag_id
-			WHERE t.name ILIKE $1 ESCAPE '\'
-			GROUP BY t.name ORDER BY 2 DESC, t.name LIMIT $2`, like, limit)
+			SELECT name, subject_count, votes
+			FROM tags
+			WHERE name ILIKE $1 ESCAPE '\'
+			ORDER BY subject_count DESC, name LIMIT $2`, like, limit)
 	} else {
+		// 带类型：先由 tags 的 trgm GIN 按名称取命中标签（按全类型热度排序，
+		// 上限 500 保证热门标签不丢），再按类型前缀聚合 tag_usage——
+		// 工作量随"命中的标签数"增长而非随 tag_usage 行数增长，规模免疫
 		rows, err = s.Pool.Query(ctx, `
-			SELECT t.name, sum(tu.subject_count)::int, sum(tu.votes)::bigint
-			FROM tag_usage tu JOIN tags t ON t.id = tu.tag_id
-			WHERE tu.type = ANY($1) AND t.name ILIKE $2 ESCAPE '\'
-			GROUP BY t.name ORDER BY 2 DESC, t.name LIMIT $3`, types, like, limit)
+			WITH hit AS (
+				SELECT id, name FROM tags
+				WHERE name ILIKE $1 ESCAPE '\'
+				ORDER BY subject_count DESC, name LIMIT 500
+			)
+			SELECT h.name, sum(tu.subject_count)::int, sum(tu.votes)::bigint
+			FROM hit h JOIN tag_usage tu ON tu.tag_id = h.id AND tu.type = ANY($2)
+			GROUP BY h.name ORDER BY 2 DESC, h.name LIMIT $3`, like, types, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -487,7 +506,8 @@ func (s *Store) TagSuggest(ctx context.Context, query string, types []int, limit
 	return out, rows.Err()
 }
 
-// MetaTagSuggest 返回元标签（TV/剧场版/日本…）候选。
+// MetaTagSuggest 返回元标签（TV/剧场版/日本…）候选；查 meta_tag_usage 预聚合表
+// （抓取后重算），不再扫 subjects unnest。
 func (s *Store) MetaTagSuggest(ctx context.Context, typ int, limit int) ([]TagStat, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 40
@@ -496,15 +516,15 @@ func (s *Store) MetaTagSuggest(ctx context.Context, typ int, limit int) ([]TagSt
 	var err error
 	if typ == 0 {
 		rows, err = s.Pool.Query(ctx, `
-			SELECT m AS name, count(*)::int AS c, 0
-			FROM subjects s, unnest(s.meta_tags) AS m
-			GROUP BY m ORDER BY c DESC, m LIMIT $1`, limit)
+			SELECT name, sum(count)::int, 0
+			FROM meta_tag_usage
+			GROUP BY name ORDER BY 2 DESC, name LIMIT $1`, limit)
 	} else {
 		rows, err = s.Pool.Query(ctx, `
-			SELECT m AS name, count(*)::int AS c, 0
-			FROM subjects s, unnest(s.meta_tags) AS m
-			WHERE s.type = $1
-			GROUP BY m ORDER BY c DESC, m LIMIT $2`, typ, limit)
+			SELECT name, count, 0
+			FROM meta_tag_usage
+			WHERE type = $1
+			ORDER BY count DESC, name LIMIT $2`, typ, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -563,11 +583,15 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	}()
 	go func() {
 		defer wg.Done()
-		errs[2] = s.Pool.QueryRow(ctx, `SELECT count(*) FROM tags`).Scan(&out.Tags)
+		// 展示用计数改取统计信息估算（reltuples 随抓取后的 ANALYZE 刷新）：
+		// 精确 count 对 subject_tags 要扫 45 万行（实测 41-96ms），每轮缓存过期都来一次不划算
+		errs[2] = s.Pool.QueryRow(ctx, `
+			SELECT GREATEST(reltuples::bigint, 0) FROM pg_class WHERE relname = 'tags'`).Scan(&out.Tags)
 	}()
 	go func() {
 		defer wg.Done()
-		errs[3] = s.Pool.QueryRow(ctx, `SELECT count(*) FROM subject_tags`).Scan(&out.SubjectTags)
+		errs[3] = s.Pool.QueryRow(ctx, `
+			SELECT GREATEST(reltuples::bigint, 0) FROM pg_class WHERE relname = 'subject_tags'`).Scan(&out.SubjectTags)
 	}()
 	go func() {
 		defer wg.Done()
@@ -670,7 +694,37 @@ func (s *Store) RecomputeTagUsage(ctx context.Context) error {
 		GROUP BY s.type, st.tag_id`); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	// tags 全类型汇总列（TagSuggest 无类型过滤直查本表）
+	if _, err := tx.Exec(ctx, `
+		UPDATE tags t SET subject_count = u.c, votes = u.v
+		FROM (SELECT tag_id, sum(subject_count)::int AS c, sum(votes)::bigint AS v
+		      FROM tag_usage GROUP BY tag_id) u
+		WHERE t.id = u.tag_id`); err != nil {
+		return err
+	}
+	// 元标签预聚合表（MetaTagSuggest 直查本表）
+	if _, err := tx.Exec(ctx, `DELETE FROM meta_tag_usage`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO meta_tag_usage (type, name, count)
+		SELECT s.type, m, count(*)::int FROM subjects s, unnest(s.meta_tags) AS m GROUP BY s.type, m`); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// 大批量写入后回收死元组并刷新规划器统计：抓取对 subject_tags 是整表级
+	// DELETE+INSERT，不 VACUUM 的话 45 万行（生产 200 万+）会持续膨胀拖慢索引扫描
+	for _, t := range []string{"subjects", "subject_tags", "tags"} {
+		if _, err := s.Pool.Exec(ctx, `VACUUM ANALYZE `+t); err != nil {
+			return err
+		}
+	}
+	if _, err := s.Pool.Exec(ctx, `VACUUM ANALYZE meta_tag_usage`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // DeleteSubject 从索引中移除单个条目。
