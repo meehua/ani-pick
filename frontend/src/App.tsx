@@ -1,30 +1,42 @@
-import { lazy, Suspense, type ReactNode } from 'react'
-import { Link, NavLink, Route, Routes } from 'react-router-dom'
-import { Compass, Home, KeyRound, Loader2, Moon, Sun, MonitorSmartphone, UserRound } from 'lucide-react'
-import { cn } from 'cn'
+import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
+import { Link, Route, Routes, useLocation, useNavigationType, useSearchParams } from 'react-router-dom'
+import { Home, LayoutGrid, MonitorSmartphone, Moon, Sun, Trophy, UserRound } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { UserAvatar } from '@/components/user-avatar'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { AuthDialogProvider, useAuthDialog } from '@/components/auth-dialog-provider'
 import { useTheme, type Theme } from '@/components/theme-provider'
+import { RouteLoading } from '@/components/ui-kit'
 import { useCredential } from './lib/credential'
 import HomePage from './pages/HomePage'
+import SubjectPage from './pages/subject/SubjectPage'
 import NotFoundPage from './pages/NotFoundPage'
 
-// 非首屏页面按需加载：把浏览/条目/管理代码从首屏 bundle 里拆出去
 const BrowsePage = lazy(() => import('./pages/BrowsePage'))
-const SubjectPage = lazy(() => import('./pages/SubjectPage'))
 const AdminLoginPage = lazy(() => import('./pages/AdminLoginPage'))
 const AdminPage = lazy(() => import('./pages/AdminPage'))
 
-function RouteLoading() {
-  return (
-    <div className="flex items-center justify-center py-24 text-muted-foreground">
-      <Loader2 className="animate-spin" size={20} />
-    </div>
-  )
+function ScrollManager() {
+  const { pathname } = useLocation()
+  const navType = useNavigationType()
+  const first = useRef(true)
+
+  useEffect(() => {
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
+  }, [])
+
+  useEffect(() => {
+    if (first.current) {
+      first.current = false
+      return
+    }
+    if (navType === 'PUSH') requestAnimationFrame(() => window.scrollTo(0, 0))
+  }, [pathname, navType])
+
+  return null
 }
 
 function ThemeSwitch() {
@@ -56,63 +68,145 @@ function ThemeSwitch() {
 function AccountButton() {
   const credential = useCredential()
   const { openLogin } = useAuthDialog()
+
   if (credential) {
+    const name = credential.user?.nickname || credential.user?.username || '已登录'
     return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="ghost" size="sm" onClick={openLogin} className="gap-1.5 px-2">
-            <UserRound size={14} />
-            <span className="max-w-28 truncate text-xs">
-              {credential.user?.nickname || credential.user?.username || '已登录'}
-            </span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>凭据保存在本机浏览器，点击管理</TooltipContent>
-      </Tooltip>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={openLogin}
+        className="gap-2 px-1.5"
+        aria-label="账号与数据通道"
+      >
+        <UserAvatar src={credential.user?.avatar} alt={name} />
+        <span className="hidden max-w-24 truncate md:block">{name}</span>
+      </Button>
     )
   }
+
   return (
-    <Button variant="outline" size="sm" onClick={openLogin} className="gap-1.5">
-      <KeyRound size={13} /> 登录
+    <Button variant="outline" size="sm" onClick={openLogin}>
+      登录
     </Button>
   )
 }
 
-const navClass = ({ isActive }: { isActive: boolean }) =>
-  cn(
-    'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
-    isActive ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
+function Wordmark() {
+  return (
+    <Link to="/" className="flex shrink-0 items-center gap-2.5" aria-label="AniPick 首页">
+      <span className="grid size-7 place-items-center rounded-lg bg-primary text-[13px] font-semibold text-primary-foreground">
+        A
+      </span>
+      <span className="text-[16px] font-semibold tracking-tight">AniPick</span>
+    </Link>
   )
+}
+
+// 导航高亮判定：高分榜是 /browse 的特例（types=2 + score + rating_min=50），
+// 顶栏与移动底栏共用同一份结论。
+function useNavActive() {
+  const location = useLocation()
+  const [sp] = useSearchParams()
+  const rank =
+    location.pathname === '/browse' &&
+    sp.get('types') === '2' &&
+    sp.get('sort') === 'score' &&
+    sp.get('rating_min') === '50'
+  const browse =
+    (location.pathname === '/browse' && !rank) || location.pathname.startsWith('/subject/')
+  return { pathname: location.pathname, rank, browse }
+}
+
+function TopNav() {
+  const { pathname, rank, browse } = useNavActive()
+  const links = [
+    { to: '/', label: '首页', active: pathname === '/' },
+    { to: '/browse', label: '作品索引', active: browse },
+    { to: '/browse?types=2&sort=score&rating_min=50', label: '高分榜', active: rank },
+  ]
+
+  return (
+    <nav className="ml-1 hidden items-center md:flex" aria-label="主导航">
+      {links.map(l => (
+        <Link
+          key={l.to}
+          to={l.to}
+          className={cn(
+            'relative flex h-16 items-center px-3 text-sm transition-colors',
+            l.active
+              ? 'font-medium text-foreground'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {l.label}
+          {l.active && (
+            <span className="absolute inset-x-2 bottom-0 h-[2px] rounded-full bg-foreground" />
+          )}
+        </Link>
+      ))}
+    </nav>
+  )
+}
+
+function MobileTabBar() {
+  const { pathname, rank, browse } = useNavActive()
+  const { openLogin } = useAuthDialog()
+
+  const item = (active: boolean) =>
+    cn(
+      'flex flex-1 flex-col items-center justify-center gap-1 text-[11px] transition-colors',
+      active ? 'font-medium text-foreground' : 'text-muted-foreground',
+    )
+
+  return (
+    <nav
+      className="fixed inset-x-0 bottom-0 z-40 flex h-14 border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+      aria-label="底部导航"
+    >
+      <Link to="/" className={item(pathname === '/')}>
+        <Home size={19} aria-hidden /> 首页
+      </Link>
+      <Link to="/browse" className={item(browse)}>
+        <LayoutGrid size={19} aria-hidden /> 索引
+      </Link>
+      <Link to="/browse?types=2&sort=score&rating_min=50" className={item(rank)}>
+        <Trophy size={19} aria-hidden /> 高分
+      </Link>
+      <button type="button" onClick={openLogin} className={item(false)}>
+        <UserRound size={19} aria-hidden /> 我的
+      </button>
+    </nav>
+  )
+}
 
 function Shell() {
+  const location = useLocation()
+
   return (
-    <div className="flex min-h-dvh flex-col">
-      <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur">
-        <div className="mx-auto flex h-14 w-full max-w-7xl items-center gap-2 px-4">
-          <Link to="/" className="mr-2 flex items-center gap-2 font-semibold tracking-tight">
-            <span className="flex size-6 items-center justify-center rounded bg-primary text-[11px] font-bold text-primary-foreground">
-              A
-            </span>
-            AniPick
-          </Link>
-          <nav className="flex items-center gap-1">
-            <NavLink to="/" end className={navClass}>
-              <Home size={14} /> 首页
-            </NavLink>
-            <NavLink to="/browse" className={navClass}>
-              <Compass size={14} /> 浏览
-            </NavLink>
-          </nav>
-          <div className="ml-auto flex items-center gap-1.5">
+    <div className="min-h-dvh">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:text-primary-foreground"
+      >
+        跳到主要内容
+      </a>
+
+      <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-[1200px] items-center gap-3 px-4 sm:px-6">
+          <Wordmark />
+          <TopNav />
+
+          <div className="ml-auto flex shrink-0 items-center gap-1">
             <AccountButton />
             <ThemeSwitch />
           </div>
         </div>
       </header>
 
-      <main className="flex-1">
-        <div className="mx-auto w-full max-w-7xl px-4 py-6">
-          <Suspense fallback={<RouteLoading />}>
+      <main id="main" className="mx-auto w-full max-w-[1200px] px-4 pb-24 pt-6 sm:px-6 md:pb-10">
+        <Suspense fallback={<RouteLoading />}>
+          <div key={location.pathname} className="page-in">
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/browse" element={<BrowsePage />} />
@@ -121,22 +215,30 @@ function Shell() {
               <Route path="/admin" element={<AdminPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
-          </Suspense>
-        </div>
+          </div>
+        </Suspense>
+
+        <footer className="mt-12 border-t pt-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="grid size-6 place-items-center rounded-md bg-primary text-[11px] font-semibold text-primary-foreground">
+                  A
+                </span>
+                <span className="text-sm font-semibold">AniPick</span>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
+              <a href="https://bgm.tv" target="_blank" rel="noreferrer" className="hover:text-foreground">
+                bgm.tv
+              </a>
+
+            </div>
+          </div>
+        </footer>
       </main>
 
-      <footer className="border-t py-6">
-        <div className="mx-auto flex w-full max-w-7xl flex-col items-center justify-between gap-2 px-4 text-xs text-muted-foreground sm:flex-row">
-          <p>
-            AniPick · 本站索引（自建） + 浏览器直连 Bangumi · 数据版权归 Bangumi 及原作者所有
-          </p>
-          <div className="flex items-center gap-3">
-            <a href="https://bgm.tv" target="_blank" rel="noreferrer" className="hover:text-foreground">
-              bgm.tv
-            </a>
-          </div>
-        </div>
-      </footer>
+      <MobileTabBar />
     </div>
   )
 }
@@ -144,6 +246,7 @@ function Shell() {
 export default function App() {
   return (
     <AuthDialogProvider>
+      <ScrollManager />
       <Shell />
     </AuthDialogProvider>
   )

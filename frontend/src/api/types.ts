@@ -303,4 +303,5 @@ export interface BgmUser {
   id: number
   username: string
   nickname: string
+  avatar?: { large?: string; medium?: string; small?: string }
 }

@@ -6,7 +6,7 @@ import { useSyncExternalStore } from 'react'
 export interface Credential {
   token: string
   savedAt: number
-  user?: { id: number; username?: string; nickname?: string }
+  user?: { id: number; username?: string; nickname?: string; avatar?: string }
 }
 
 const KEY = 'anipick.credential.v1'
@@ -49,10 +49,6 @@ function subscribe(fn: () => void) {
     window.removeEventListener('storage', onStorage)
     window.removeEventListener(EVENT, notify)
   }
-}
-
-export function getCredential(): Credential | null {
-  return snapshot()
 }
 
 export function saveCredential(token: string, user?: Credential['user']) {

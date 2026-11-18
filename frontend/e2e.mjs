@@ -88,7 +88,7 @@ await check('标签可搜索、可点选', async () => {
 await check('排序切换', async () => {
   await page.goto(BASE + '/browse?types=2', { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('[data-subject-id]')
-  await page.locator('button[role=combobox]').last().click()
+  await page.getByRole('combobox', { name: '排序' }).click()
   await page.getByRole('option', { name: '评分', exact: true }).click()
   await page.waitForTimeout(500)
   assert(page.url().includes('sort=score'), `URL 未写入 sort=score: ${page.url()}`)
@@ -106,7 +106,7 @@ await check('分页可用', async () => {
   }
 })
 
-await check('条目详情页（本站索引 + 标签占比）', async () => {
+await check('条目详情页（首屏决策信息 + 资料区）', async () => {
   await page.goto(BASE + '/browse?types=2&sort=score', { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('[data-subject-id]')
   const href = await page.locator('[data-subject-id]').first().getAttribute('href')
@@ -114,7 +114,8 @@ await check('条目详情页（本站索引 + 标签占比）', async () => {
   await page.waitForSelector('h1')
   await page.getByRole('tab', { name: /制作人员|角色/ }).waitFor({ timeout: 40000 }).catch(() => {})
   const body = await page.locator('body').innerText()
-  assert(body.includes('标签与占比'), '缺少标签占比区块')
+  assert((await page.locator('a[href*="tags="]').count()) > 0, '缺少标签入口')
+  assert(body.includes('评分分布'), '缺少评分分布')
   assert(body.includes('Bangumi'), '缺少 Bangumi 说明')
   assert(body.includes('制作人员') || body.includes('角色'), '镜像通道未能加载详情')
   await page.screenshot({ path: `${SHOTS}/subject.png`, fullPage: true })
@@ -190,23 +191,37 @@ await check('令牌只发给官方域名', async () => {
     localStorage.setItem('anipick.endpoint.v1', 'official-bgm')
   })
   let auth = ''
-  await page.route('https://api.bgm.tv/v0/subjects/326', async route => {
-    auth = route.request().headers()['authorization'] ?? ''
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        id: 326, type: 2, name: 'Test', name_cn: 'Test', date: '2004-01-01', platform: 'TV',
-        images: {}, summary: '', infobox: [],
-        rating: { rank: 1, total: 0, score: 0, count: {} },
-        collection: { wish: 0, collect: 0, doing: 0, on_hold: 0, dropped: 0 },
-        tags: [],
-      }),
-    })
+  // 官方通道测试只 mock 主条目；分支资源也必须 mock，否则真实请求会被 CORS 噪声干扰
+  await page.route('https://api.bgm.tv/v0/**', async route => {
+    const url = route.request().url()
+    if (url.endsWith('/v0/subjects/326')) {
+      auth = route.request().headers()['authorization'] ?? ''
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 326, type: 2, name: 'Test', name_cn: 'Test', date: '2004-01-01', platform: 'TV',
+          images: {}, summary: '', infobox: [],
+          rating: { rank: 1, total: 0, score: 0, count: {} },
+          collection: { wish: 0, collect: 0, doing: 0, on_hold: 0, dropped: 0 },
+          tags: [],
+        }),
+      })
+      return
+    }
+    if (url.includes('/characters') || url.includes('/persons')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      return
+    }
+    if (url.includes('/episodes')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"data":[]}' })
+      return
+    }
+    await route.continue()
   })
   await page.goto(BASE + '/subject/326', { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(1500)
-  await page.unroute('https://api.bgm.tv/v0/subjects/326')
+  await page.unroute('https://api.bgm.tv/v0/**')
   assert(auth === 'Bearer fake-token-for-test', `官方请求未携带令牌: ${auth}`)
   await page.evaluate(() => {
     localStorage.removeItem('anipick.credential.v1')

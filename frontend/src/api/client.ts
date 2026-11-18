@@ -1,6 +1,6 @@
 import type {
   AdminOverview, AdminSettings, BgmCharacter, BgmEpisodeList, BgmPerson, BgmRelation,
-  BgmSubject, BgmUser, CrawlState, MetaResponse, MetricsSnapshot, NetworkStatus, Run, SearchResult,
+  BgmSubject, BgmUser, CrawlState, MetaResponse, MetricsSnapshot, NetworkStatus, SearchResult,
   Subject, TagStat,
 } from './types'
 import { endpointCandidates, getActiveId, imageBase, recordUsedEndpoint, type Endpoint } from '../net/endpoints'
@@ -33,7 +33,7 @@ async function toError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, code, message, hint)
 }
 
-export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, { signal, credentials: 'same-origin' })
@@ -45,7 +45,7 @@ export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> 
   return res.json() as Promise<T>
 }
 
-export async function apiSend<T>(path: string, method: string, body?: unknown): Promise<T> {
+async function apiSend<T>(path: string, method: string, body?: unknown): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, {
@@ -150,7 +150,6 @@ export const adminTestCredential = () =>
 export const adminStartCrawl = (mode: 'full' | 'incremental' | 'refresh') =>
   apiSend<{ run_id: number; status: CrawlState }>('/api/admin/crawl', 'POST', { mode })
 export const adminCancelCrawl = () => apiSend<{ ok: boolean }>('/api/admin/crawl/cancel', 'POST', {})
-export const adminRuns = (limit = 30) => apiGet<{ items: Run[] }>(`/api/admin/runs?limit=${limit}`)
 export const adminRefreshSubject = (id: number) =>
   apiSend<Subject>(`/api/admin/subjects/${id}/refresh`, 'POST', {})
 export const adminDeleteSubject = (id: number) =>
@@ -174,7 +173,6 @@ export const adminMetricsReset = () =>
 
 // ---------- 用户登录（凭据只在本机；详情由浏览器直接请求） ----------
 
-export const BGM_BASE = 'https://api.bgm.tv'
 const OFFICIAL_TIMEOUT_MS = 10000
 const MIRROR_TIMEOUT_MS = 20000
 
@@ -224,7 +222,7 @@ async function requestFrom<T>(
 }
 
 // 浏览器直连：按官方 / 镜像站顺序取公开数据；令牌只可能出现在官方请求里。
-export async function bgmGet<T>(
+async function bgmGet<T>(
   path: string,
   token?: string,
   signal?: AbortSignal,

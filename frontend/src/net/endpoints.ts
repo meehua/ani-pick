@@ -17,7 +17,7 @@ export interface Endpoint {
 // 官方站点域名：bangumi.tv / bgm.tv / chii.in（以及 next.bgm.tv）。
 // 实测只有 api.bgm.tv 提供 /v0 JSON API；其余域名返回站点页面或 404，
 // 不能作为 API 通道，也不允许被添加成镜像。
-export const OFFICIAL_SITE_HOSTS = ['bgm.tv', 'bangumi.tv', 'chii.in', 'next.bgm.tv'] as const
+const OFFICIAL_SITE_HOSTS = ['bgm.tv', 'bangumi.tv', 'chii.in', 'next.bgm.tv'] as const
 
 // 不要凭猜测往这里加域名，否则会把用户令牌发到不可信主机。
 export const OFFICIAL_ENDPOINTS: ReadonlyArray<Endpoint> = [
@@ -95,7 +95,7 @@ export function userMirrors(): UserMirror[] {
   return Array.isArray(list) ? list.filter(m => m && typeof m.apiBase === 'string') : []
 }
 
-export function allMirrors(): Endpoint[] {
+function allMirrors(): Endpoint[] {
   const user = userMirrors()
     .map((m): Endpoint => ({
       id: `user:${m.apiBase}`,
@@ -112,7 +112,7 @@ export function allEndpoints(): Endpoint[] {
   return [...OFFICIAL_ENDPOINTS, ...allMirrors()]
 }
 
-export function endpointById(id: string): Endpoint | undefined {
+function endpointById(id: string): Endpoint | undefined {
   return allEndpoints().find(e => e.id === id)
 }
 
