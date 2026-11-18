@@ -183,13 +183,14 @@ export function SubjectHero({
           )}
         </div>
 
-        {/* 磨砂面板：评分扇形 + 标签柱状。lg+ 右侧第三列；sm–md hero 底部两卡横排；窄屏竖排全宽。 */}
+        {/* 图形即玻璃：无面板底——扇形自带圆形镜片、柱条自带毛玻璃。
+            lg+ 右侧第三列；sm–md hero 底部两列横排；窄屏竖排全宽。 */}
         <div className="grid col-span-full grid-cols-1 gap-3 sm:grid-cols-2 lg:col-span-1 lg:col-start-3 lg:row-span-2 lg:row-start-1 lg:grid-cols-1">
-          <div className="rounded-xl bg-white/[0.07] p-3 ring-1 ring-white/15 backdrop-blur-md">
+          <div>
             <p className="mb-2 text-xs text-white/55">评分分布</p>
             <RatingDonut counts={counts} />
           </div>
-          <div className="min-w-0 rounded-xl bg-white/[0.07] p-3 ring-1 ring-white/15 backdrop-blur-md">
+          <div className="min-w-0">
             <p className="mb-2 text-xs text-white/55">
               标签 <span className="text-white/35">左右滑动查看</span>
             </p>

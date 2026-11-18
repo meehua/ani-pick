@@ -37,22 +37,16 @@ export function SubjectSkeleton() {
           </div>
         </div>
 
-        {/* 磨砂面板占位：lg+ 右列；sm–md 底部两卡横排；窄屏竖排 */}
+        {/* 图形占位：与正式 hero 同构（无面板底——玻璃圆盘 + 裸排柱条） */}
         <div className="grid col-span-full grid-cols-1 gap-3 sm:grid-cols-2 lg:col-span-1 lg:col-start-3 lg:row-span-2 lg:row-start-1 lg:grid-cols-1">
-          <div className="rounded-xl bg-white/[0.07] p-3 ring-1 ring-white/15">
-            <Skeleton className="mb-2 h-4 w-16 bg-white/10" />
-            <Skeleton className="mx-auto size-[132px] rounded-full bg-white/10" />
-          </div>
-          <div className="rounded-xl bg-white/[0.07] p-3 ring-1 ring-white/15">
-            <Skeleton className="mb-2 h-4 w-16 bg-white/10" />
-            <div className="flex items-end gap-1.5 px-5">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="w-12 shrink-0 space-y-1">
-                  <Skeleton className="w-full rounded-t bg-white/10" style={{ height: 20 + ((i * 17) % 44) }} />
-                  <Skeleton className="h-3 w-full bg-white/10" />
-                </div>
-              ))}
-            </div>
+          <Skeleton className="mx-auto size-[132px] rounded-full bg-white/[0.06] ring-1 ring-white/10" />
+          <div className="flex items-end gap-1.5 px-5">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="w-12 shrink-0 space-y-1">
+                <Skeleton className="w-full rounded-t bg-white/10" style={{ height: 20 + ((i * 17) % 44) }} />
+                <Skeleton className="h-3 w-full bg-white/10" />
+              </div>
+            ))}
           </div>
         </div>
       </DarkStage>
