@@ -18,13 +18,24 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+// Open 建立连接池。maxConns/minConns ≤0 时使用内置默认值（按 1GB 内存机校准），
+// 可经 ANIPICK_DB_MAX_CONNS / ANIPICK_DB_MIN_CONNS 按机器规格调整。
+func Open(ctx context.Context, dsn string, maxConns, minConns int32) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("解析 ANIPICK_DATABASE_URL: %w", err)
 	}
-	cfg.MaxConns = 12
-	cfg.MinConns = 2
+	if maxConns <= 0 {
+		maxConns = 12
+	}
+	if minConns <= 0 {
+		minConns = 2
+	}
+	if minConns > maxConns {
+		minConns = maxConns
+	}
+	cfg.MaxConns = maxConns
+	cfg.MinConns = minConns
 	cfg.MaxConnLifetime = time.Hour
 	cfg.HealthCheckPeriod = 30 * time.Second
 	// 每条 SQL 的耗时进请求链路累积器（管理端性能面板用）

@@ -29,6 +29,9 @@ type Config struct {
 	// TrustedProxyCIDRs 是可信反代的网段列表（逗号分隔 CIDR）；
 	// 只有对端在此列表内才采信 ClientIPHeader，防止伪造头绕过限流。
 	TrustedProxyCIDRs string
+	// 连接池规格（默认按 1GB 内存机校准）：换机器时按内存调整。
+	DbMaxConns int
+	DbMinConns int
 }
 
 // Net 控制服务端出站网络（仅抓取使用）：DoH 解析与 ECH。
@@ -144,6 +147,9 @@ func Load() (Config, error) {
 
 	c.ClientIPHeader = env("ANIPICK_CLIENT_IP_HEADER", c.ClientIPHeader)
 	c.TrustedProxyCIDRs = env("ANIPICK_TRUSTED_PROXY_CIDRS", c.TrustedProxyCIDRs)
+
+	c.DbMaxConns = envInt("ANIPICK_DB_MAX_CONNS", c.DbMaxConns)
+	c.DbMinConns = envInt("ANIPICK_DB_MIN_CONNS", c.DbMinConns)
 
 	return c, nil
 }

@@ -45,7 +45,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Open(ctx, cfg.DatabaseURL)
+	pool, err := db.Open(ctx, cfg.DatabaseURL, int32(cfg.DbMaxConns), int32(cfg.DbMinConns))
 	if err != nil {
 		slog.Error("数据库连接失败", "err", err)
 		os.Exit(1)

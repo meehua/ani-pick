@@ -4,6 +4,16 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    # 按机器规格调整（默认按 1GB 内存机校准）：换大机器时在 .env 提高
+    # PG_MAX_CONNECTIONS / PG_SHARED_BUFFERS / PG_EFFECTIVE_CACHE_SIZE
+    command:
+      - postgres
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-40}
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-256MB}
     environment:
       POSTGRES_DB: ani_pick
       POSTGRES_USER: ani_pick
@@ -28,6 +38,8 @@ services:
       - "${ANIPICK_PORT:-8787}:8787"
     environment:
       ANIPICK_ADDR: ":8787"
+      # Go 堆内存上限：小内存机器防 OOM（Go GC 到达上限即加速回收），默认 192MiB
+      GOMEMLIMIT: "${GOMEMLIMIT:-192MiB}"
       # 容器内必须走 compose 的 postgres 服务，而不是 .env 里的 127.0.0.1
       ANIPICK_DATABASE_URL: "postgres://ani_pick:${POSTGRES_PASSWORD:-ani_pick}@postgres:5432/ani_pick?sslmode=disable"
       ANIPICK_ADMIN_PASSWORD: "${ANIPICK_ADMIN_PASSWORD:-anipick}"
