@@ -32,17 +32,19 @@ HTML 与 API 每次回源）。以下约束是实现里已经落地的取舍，�
   不可变、缓存进程内生效）。新增端点自动继承；若绕开 `withMiddleware` 自起路由，
   必须自行接上压缩。基准数据：471KB 主包 L6 压缩 8.5ms（E5 超售机约 25-50ms），
   所以静态必须缓存、动态按需压、禁用 L9。
-- **热点只读查询必须有 TTL 缓存**：搜索总数（`store.Search` 的 count 缓存 60s）、
-  搜索页结果（60s、多键）、`/api/tags` 标签候选（60s、多键）、条目详情
-  `/api/subjects/{id}`（60s、按 id、上限 256 键）、`/api/meta`（30s）、
-  `/api/meta-tags`（10 分钟、多键）、`/api/admin/overview`（3s，抓取/设置等动作后
-  `invalidateOverview()`）。列表类数据只在抓取与条目级操作后变化，失效统一走
-  抓取收尾钩子（`crawler.OnRunFinished` → `invalidateQueryCaches`，含 count）与
-  管理端刷新/删除（`invalidateSubject(id)` / `invalidateQueryCaches`），TTL 只兜底；
+- **热点只读查询必须有 TTL 缓存**：搜索总数（`store.Search` 的 count 缓存）、
+  搜索页结果、`/api/tags` 标签候选、条目详情 `/api/subjects/{id}`（按 id、上限
+  256 键）共用 `query_ttl`（默认 60s）；公开 GET 响应 `Cache-Control` 用
+  `public_ttl`（默认 30s）——两者存系统设置（`AppSettings.Cache`，管理后台
+  「设置 → 查询缓存」可调），server 侧 60s 快照 + 保存设置后立刷，禁止在
+  handler 里写死 TTL。`/api/meta`（30s）、`/api/meta-tags`（10 分钟、多键）、
+  `/api/admin/overview`（3s，抓取/设置等动作后 `invalidateOverview()`）为固定值。
+  列表类数据只在抓取与条目级操作后变化，失效统一走抓取收尾钩子
+  （`crawler.OnRunFinished` → `invalidateQueryCaches`，含 count）与管理端
+  刷新/删除（`invalidateSubject(id)` / `invalidateQueryCaches`），TTL 只兜底；
   新增同类查询照此办理，并写明失效时机。缓存未命中走单飞（`flightGroup.do`）
   合并并发同键回源，查询用脱离请求的后台 ctx + `db.ContextWithTrace` 保留面板归因。
-  公开 GET 端点响应带 `Cache-Control: public, max-age=30`（浏览器与 CF 边缘吸收
-  重复请求）；管理端与错误响应保持 no-store。
+  管理端与错误响应保持 no-store。
 - **管理面校验禁止每请求写库**：会话校验走 `store.SessionValid` 的进程内缓存
   （1 分钟 TTL，`last_seen` 至多 10 分钟落一次库）；登出/改密必须清缓存
   （`DeleteSession` / `DeleteAllSessions` 已处理，新路径不得绕过）。

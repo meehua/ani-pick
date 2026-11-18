@@ -30,9 +30,18 @@ type BGMSettings struct {
 	UA     string `json:"ua"`
 }
 
+// CacheSettings 是查询结果缓存参数（管理后台「设置 → 查询缓存」可调）。
+// 列表数据只在抓取与条目级操作后变化，失效走显式钩子，TTL 只是兜底；
+// 调小更即时、调大更省 CPU。0/缺省视为默认值（兼容旧库数据无此字段）。
+type CacheSettings struct {
+	QueryTTL  int `json:"query_ttl"`  // 搜索页/搜索总数/标签候选/条目详情的进程内缓存 TTL（秒）
+	PublicTTL int `json:"public_ttl"` // 公开 GET 响应 Cache-Control max-age（秒，浏览器与 CF 边缘）
+}
+
 type AppSettings struct {
 	Crawl     CrawlSettings `json:"crawl"`
 	BGM       BGMSettings   `json:"bgm"`
+	Cache     CacheSettings `json:"cache"`
 	UpdatedAt time.Time     `json:"updated_at"`
 }
 
@@ -57,6 +66,15 @@ func (s *AppSettings) Normalize() {
 	c.RefreshBatch = clamp(c.RefreshBatch, 0, 5000)
 	c.IncrementalPages = clamp(c.IncrementalPages, 1, 1000)
 	c.IncrementalIntervalMin = clamp(c.IncrementalIntervalMin, 5, 100000)
+	// 缓存参数：0 = 未设置/恢复默认；下限 5s 防止缓存形同虚设，上限 1 天防陈旧失控
+	if s.Cache.QueryTTL <= 0 {
+		s.Cache.QueryTTL = 60
+	}
+	if s.Cache.PublicTTL <= 0 {
+		s.Cache.PublicTTL = 30
+	}
+	s.Cache.QueryTTL = clamp(s.Cache.QueryTTL, 5, 86400)
+	s.Cache.PublicTTL = clamp(s.Cache.PublicTTL, 5, 86400)
 	if s.BGM.UA == "" {
 		s.BGM.UA = "AniPick/1.0 (+https://github.com/bangumi; local indexer)"
 	}

@@ -4,6 +4,7 @@ package store
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,15 +23,27 @@ type Store struct {
 	sessCache  map[string]sessionCacheEntry
 	countMu    sync.Mutex
 	countCache map[string]countEntry
+	// countTTL 是搜索总数缓存 TTL，server 按系统设置注入（SetCountTTL），0 前取内置默认。
+	countTTL atomic.Int64
 }
 
 func New(pool *pgxpool.Pool, box *secretbox.Box) *Store {
-	return &Store{
+	st := &Store{
 		Pool:       pool,
 		Box:        box,
 		sessCache:  map[string]sessionCacheEntry{},
 		countCache: map[string]countEntry{},
 	}
+	st.countTTL.Store(int64(searchCountTTL))
+	return st
+}
+
+// SetCountTTL 设置搜索总数缓存 TTL（server 从系统设置同步）；≤0 恢复内置默认。
+func (s *Store) SetCountTTL(d time.Duration) {
+	if d <= 0 {
+		d = searchCountTTL
+	}
+	s.countTTL.Store(int64(d))
 }
 
 // InvalidateCounts 清空搜索总数缓存（抓取结束/删除条目后调用），

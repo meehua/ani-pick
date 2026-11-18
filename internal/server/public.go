@@ -73,17 +73,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "db": "up", "time": time.Now()})
 }
 
-// 公开 GET 端点的浏览器/CDN 缓存时长；列表类数据只在抓取后变化，30s 陈旧无感。
-const publicCacheTTL = 30 * time.Second
+// 公开 GET 端点的浏览器/CDN 缓存与进程内查询缓存的默认时长；实际值存系统设置
+// （AppSettings.Cache，管理后台「设置 → 查询缓存」可调），server 侧持有 60s 快照。
+// 列表类数据只在抓取后变化，失效走显式钩子（invalidateQueryCaches），TTL 仅兜底。
 
-// searchPageCacheTTL 是搜索页结果的进程内缓存：并发访客的相同视图（首页/浏览页
-// 默认列表等）共享同一份结果字节，省掉重复查询与 JSON 编码。数据只在抓取与
-// 管理端删改条目后变化，失效走 invalidateQueryCaches（抓取收尾钩子/管理操作），
-// TTL 仅兜底，因此放长到 60s——2c1g 机器上每次回源都是真金白银的 CPU。
-const (
-	searchPageCacheTTL = 60 * time.Second
-	searchPageMaxKeys  = 256
-)
+// searchPageMaxKeys 是搜索页结果缓存的键上限（查询组合无界，超限整体换新）；
+// TTL 走系统设置（AppSettings.Cache.query_ttl）。
+const searchPageMaxKeys = 256
 
 // searchCacheKey 生成与查询语义一一对应的缓存键：列表参数排序去重、关键词去空白，
 // 使参数顺序不同的等价查询命中同一份缓存。
@@ -138,12 +134,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if q.Page > 5000 {
 		q.Page = 5000
 	}
+	queryTTL, publicTTL := s.cacheTTLs(r.Context())
 	key := searchCacheKey(q)
 	s.pageMu.Lock()
-	if e, ok := s.pageCache[key]; ok && time.Since(e.at) < searchPageCacheTTL {
+	if e, ok := s.pageCache[key]; ok && time.Since(e.at) < queryTTL {
 		body := e.body
 		s.pageMu.Unlock()
-		writeJSONTTL(w, http.StatusOK, body, publicCacheTTL)
+		writeJSONTTL(w, http.StatusOK, body, publicTTL)
 		return
 	}
 	s.pageMu.Unlock()
@@ -175,7 +172,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	writeJSONTTL(w, http.StatusOK, body, publicCacheTTL)
+	writeJSONTTL(w, http.StatusOK, body, publicTTL)
 }
 
 func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
@@ -184,12 +181,13 @@ func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "无效的条目 ID")
 		return
 	}
+	queryTTL, publicTTL := s.cacheTTLs(r.Context())
 	key := strconv.FormatInt(id, 10)
 	s.detailMu.Lock()
-	if e, ok := s.detailCache[key]; ok && time.Since(e.at) < detailCacheTTL {
+	if e, ok := s.detailCache[key]; ok && time.Since(e.at) < queryTTL {
 		body := e.body
 		s.detailMu.Unlock()
-		writeJSONTTL(w, http.StatusOK, body, publicCacheTTL)
+		writeJSONTTL(w, http.StatusOK, body, publicTTL)
 		return
 	}
 	s.detailMu.Unlock()
@@ -219,26 +217,27 @@ func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	s.detailCache[key] = cachedJSON{at: time.Now(), body: body}
 	s.detailMu.Unlock()
-	writeJSONTTL(w, http.StatusOK, body, publicCacheTTL)
+	writeJSONTTL(w, http.StatusOK, body, publicTTL)
 }
 
 func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	types := parseIntCSV(r, "types")
 	limit := parseIntParam(r, "limit", 30)
+	queryTTL, publicTTL := s.cacheTTLs(r.Context())
 	key := tagCacheKey(q, types, limit)
 
 	s.tagMu.Lock()
-	if e, ok := s.tagCache[key]; ok && time.Since(e.at) < tagCacheTTL {
+	if e, ok := s.tagCache[key]; ok && time.Since(e.at) < queryTTL {
 		body := e.body
 		s.tagMu.Unlock()
-		writeJSONTTL(w, http.StatusOK, body, publicCacheTTL)
+		writeJSONTTL(w, http.StatusOK, body, publicTTL)
 		return
 	}
 	s.tagMu.Unlock()
 
 	// 标签候选是搜索框逐键请求的高频端点（每键一次查询），必须进程内缓存；
-	// 数据只在抓取后随 RecomputeTagUsage 变化，失效挂抓取收尾钩子，TTL 兜底 60s。
+	// 数据只在抓取后随 RecomputeTagUsage 变化，失效挂抓取收尾钩子，TTL 兜底。
 	body, err := s.flights.do("tags:"+key, func() ([]byte, error) {
 		tr := db.TraceFrom(r.Context())
 		ctx, cancel := context.WithTimeout(db.ContextWithTrace(context.Background(), tr), 10*time.Second)
@@ -263,7 +262,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	writeJSONTTL(w, http.StatusOK, body, publicCacheTTL)
+	writeJSONTTL(w, http.StatusOK, body, publicTTL)
 }
 
 // tagCacheKey 归一化标签候选查询：关键词去空白、类型排序，等价请求共享同一份缓存。
@@ -277,13 +276,9 @@ type cachedMetaTags struct {
 	data []store.TagStat
 }
 
-// tagCacheTTL / detailCacheTTL 分别是标签候选与条目详情的结果缓存；
-// 键上限用于淘汰长期不用的参数组合。失效时机：抓取收尾钩子全量清空，
-// 管理端刷新/删除条目按 id（详情）或全量（删除影响搜索结果）。
+// 进程内缓存的键上限（内存有界）；TTL 走系统设置，不在此写死。
 const (
-	tagCacheTTL        = 60 * time.Second
 	tagCacheMaxKeys    = 256
-	detailCacheTTL     = 60 * time.Second
 	detailCacheMaxKeys = 256
 
 	metaTagsTTL      = 10 * time.Minute
@@ -296,12 +291,13 @@ func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 	typ := parseIntParam(r, "type", 0)
 	limit := parseIntParam(r, "limit", 40)
 	key := strconv.Itoa(typ) + ":" + strconv.Itoa(limit)
+	_, publicTTL := s.cacheTTLs(r.Context())
 
 	s.cacheMu.Lock()
 	if e, ok := s.metaTags[key]; ok && time.Since(e.at) < metaTagsTTL {
 		data := e.data
 		s.cacheMu.Unlock()
-		writeJSONTTL(w, http.StatusOK, mustMarshalItems(data), publicCacheTTL)
+		writeJSONTTL(w, http.StatusOK, mustMarshalItems(data), publicTTL)
 		return
 	}
 	s.cacheMu.Unlock()
@@ -318,7 +314,7 @@ func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 	}
 	s.metaTags[key] = cachedMetaTags{at: time.Now(), data: items}
 	s.cacheMu.Unlock()
-	writeJSONTTL(w, http.StatusOK, mustMarshalItems(items), publicCacheTTL)
+	writeJSONTTL(w, http.StatusOK, mustMarshalItems(items), publicTTL)
 }
 
 // mustMarshalItems 序列化标签候选列表；TagStat 字段全是基础类型，不会失败。
@@ -332,11 +328,12 @@ func mustMarshalItems(items []store.TagStat) []byte {
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
+	_, publicTTL := s.cacheTTLs(r.Context())
 	s.metaMu.Lock()
 	body, fresh := s.metaBody, time.Since(s.metaBody.at) < metaCacheTTL
 	s.metaMu.Unlock()
 	if fresh && body.body != nil {
-		writeJSONTTL(w, http.StatusOK, body.body, publicCacheTTL)
+		writeJSONTTL(w, http.StatusOK, body.body, publicTTL)
 		return
 	}
 
@@ -358,5 +355,5 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	s.metaMu.Lock()
 	s.metaBody = cachedJSON{at: time.Now(), body: payload}
 	s.metaMu.Unlock()
-	writeJSONTTL(w, http.StatusOK, payload, publicCacheTTL)
+	writeJSONTTL(w, http.StatusOK, payload, publicTTL)
 }

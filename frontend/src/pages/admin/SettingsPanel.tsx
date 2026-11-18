@@ -9,7 +9,7 @@ import { Panel } from '@/components/panel'
 import {
   adminChangePassword, adminNetwork, adminSaveSettings, adminTestCredential,
 } from '../../api/client'
-import type { AdminSettings, CrawlSettings, NetworkStatus } from '../../api/types'
+import type { AdminSettings, CacheSettings, CrawlSettings, NetworkStatus } from '../../api/types'
 import { TYPE_LABEL, TYPE_ORDER } from '../../api/types'
 import { NumField, Toggle } from './parts'
 
@@ -23,6 +23,7 @@ export function SettingsPanel({
   onError: (msg: string) => void
 }) {
   const [crawl, setCrawl] = React.useState<CrawlSettings>(settings.crawl)
+  const [cache, setCache] = React.useState<CacheSettings>(settings.cache)
   const [token, setToken] = React.useState('')
   const [cookie, setCookie] = React.useState('')
   const [clearToken, setClearToken] = React.useState(false)
@@ -54,10 +55,15 @@ export function SettingsPanel({
 
   React.useEffect(() => {
     setCrawl(settings.crawl)
+    setCache(settings.cache)
   }, [settings])
 
   function set<K extends keyof CrawlSettings>(key: K, value: CrawlSettings[K]) {
     setCrawl(c => ({ ...c, [key]: value }))
+  }
+
+  function setCacheField<K extends keyof CacheSettings>(key: K, value: CacheSettings[K]) {
+    setCache(c => ({ ...c, [key]: value }))
   }
 
   async function save() {
@@ -65,6 +71,7 @@ export function SettingsPanel({
     try {
       await adminSaveSettings({
         crawl,
+        cache,
         bgm: {
           token: token.trim() || undefined,
           cookie: cookie.trim() || undefined,
@@ -145,6 +152,27 @@ export function SettingsPanel({
             <Toggle label="自动增量" checked={crawl.auto_incremental} onChange={v => set('auto_incremental', v)} />
             <Toggle label="自动重爬过期" checked={crawl.auto_refresh} onChange={v => set('auto_refresh', v)} />
             <Toggle label="全量后清理旧数据" checked={crawl.prune_on_full} onChange={v => set('prune_on_full', v)} />
+          </div>
+      </Panel>
+
+      <Panel title="查询缓存" contentClassName="space-y-3">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            搜索页 / 搜索总数 / 标签候选 / 条目详情共用进程内结果缓存，抓取收尾与管理端删改条目时会主动失效，
+            这里的 TTL 只是兜底。数据量小、流量高的站点调大更省 CPU，改勤的站点调小更即时。
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <NumField
+              label="查询结果缓存 (s)"
+              value={cache.query_ttl}
+              onChange={v => setCacheField('query_ttl', v)}
+              hint="5–86400，0 = 默认 60"
+            />
+            <NumField
+              label="浏览器缓存 max-age (s)"
+              value={cache.public_ttl}
+              onChange={v => setCacheField('public_ttl', v)}
+              hint="5–86400，0 = 默认 30"
+            />
           </div>
       </Panel>
 

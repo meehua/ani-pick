@@ -82,6 +82,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 
 type adminSettingsPayload struct {
 	Crawl store.CrawlSettings `json:"crawl"`
+	Cache store.CacheSettings `json:"cache"`
 	BGM   struct {
 		Token       string `json:"token"`
 		Cookie      string `json:"cookie"`
@@ -99,6 +100,7 @@ func (s *Server) handleAdminGetSettings(w http.ResponseWriter, r *http.Request) 
 	masked := settings.Mask()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"crawl": masked.Crawl,
+		"cache": masked.Cache,
 		"bgm": map[string]any{
 			"token":             masked.BGM.Token,
 			"cookie":            masked.BGM.Cookie,
@@ -123,6 +125,7 @@ func (s *Server) handleAdminPutSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	next := cur
 	next.Crawl = payload.Crawl
+	next.Cache = payload.Cache
 
 	if payload.BGM.ClearToken {
 		next.BGM.Token = ""
@@ -139,6 +142,8 @@ func (s *Server) handleAdminPutSettings(w http.ResponseWriter, r *http.Request) 
 		internalError(w, err)
 		return
 	}
+	// 缓存参数可能已变化：丢弃快照让下一次请求重新读取
+	s.invalidateCacheConfig()
 	s.invalidateOverview()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "updated_at": next.UpdatedAt})
 }

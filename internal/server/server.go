@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"path"
@@ -46,12 +48,19 @@ type Server struct {
 	pageCache map[string]cachedJSON
 
 	// 标签候选与条目详情的结果缓存（数据只在抓取/管理操作后变化）
-	tagMu    sync.Mutex
-	tagCache map[string]cachedJSON
+	tagMu       sync.Mutex
+	tagCache    map[string]cachedJSON
 	detailMu    sync.Mutex
 	detailCache map[string]cachedJSON
 
 	flights flightGroup
+
+	// 缓存参数快照（系统设置 → 查询缓存）：启动时读一次，运行期 60s 惰性刷新、
+	// 保存设置后立刷——公开热路径不因设置引入每请求查询。
+	cfgMu     sync.Mutex
+	cfgAt     time.Time
+	cacheTTL  time.Duration // 搜索页/总数/标签候选/详情共用
+	publicTTL time.Duration // 公开 GET 响应 Cache-Control max-age
 
 	m *metrics
 }
@@ -95,10 +104,23 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 		pageCache:      map[string]cachedJSON{},
 		tagCache:       map[string]cachedJSON{},
 		detailCache:    map[string]cachedJSON{},
+		cacheTTL:       defaultQueryTTL,
+		publicTTL:      defaultPublicTTL,
 		clientIPHeader: strings.TrimSpace(opts.ClientIPHeader),
 		trustedCIDRs:   opts.TrustedProxyCIDRs,
 		m:              newMetrics(),
 	}
+	// 启动即同步一次系统设置的缓存参数；失败先落默认值，运行期惰性重试
+	if st.Pool != nil {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if settings, err := st.LoadSettings(sctx, defaults); err != nil {
+			slog.Warn("读取缓存设置失败，使用默认值", "err", err)
+		} else {
+			s.applyCacheSettings(settings.Cache)
+		}
+		cancel()
+	}
+	s.cfgAt = time.Now()
 	// 抓取收尾时失效公开查询缓存（增量逐批写入，失败/取消也要失效）
 	if cw != nil {
 		cw.OnRunFinished = s.invalidateQueryCaches
@@ -178,6 +200,44 @@ func (s *Server) invalidateSubject(id int64) {
 	s.detailMu.Lock()
 	delete(s.detailCache, strconv.FormatInt(id, 10))
 	s.detailMu.Unlock()
+}
+
+// 缓存参数默认值与快照刷新周期；实际值存系统设置（AppSettings.Cache），
+// 管理后台「设置 → 查询缓存」可调。
+const (
+	defaultQueryTTL    = 60 * time.Second
+	defaultPublicTTL   = 30 * time.Second
+	cacheCfgRefreshTTL = 60 * time.Second
+)
+
+// applyCacheSettings 落快照并同步 store 的 count TTL。
+func (s *Server) applyCacheSettings(c store.CacheSettings) {
+	s.cacheTTL = time.Duration(c.QueryTTL) * time.Second
+	s.publicTTL = time.Duration(c.PublicTTL) * time.Second
+	s.store.SetCountTTL(s.cacheTTL)
+}
+
+// cacheTTLs 返回当前缓存参数：快照 60s 内复用，过期才读一次设置；
+// 读失败沿用上一次取值（无取值时保留默认），不阻塞公开热路径。
+func (s *Server) cacheTTLs(ctx context.Context) (queryTTL, publicTTL time.Duration) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	if time.Since(s.cfgAt) > cacheCfgRefreshTTL {
+		if settings, err := s.store.LoadSettings(ctx, s.defaults); err == nil {
+			s.applyCacheSettings(settings.Cache)
+		} else {
+			slog.Warn("刷新缓存设置失败，沿用上一次取值", "err", err)
+		}
+		s.cfgAt = time.Now()
+	}
+	return s.cacheTTL, s.publicTTL
+}
+
+// invalidateCacheConfig 丢弃设置快照，下一次请求重新读取（保存设置后调用）。
+func (s *Server) invalidateCacheConfig() {
+	s.cfgMu.Lock()
+	s.cfgAt = time.Time{}
+	s.cfgMu.Unlock()
 }
 
 func (s *Server) spa() http.Handler {

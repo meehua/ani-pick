@@ -18,7 +18,8 @@ const subjectColumns = `s.id, s.type, s.name, s.name_cn, COALESCE(to_char(s.date
 	s.nsfw, s.meta_tags, s.image, s.tags_total, s.locked, s.fetched_at`
 
 // 搜索总数缓存：翻页复用同一 count，上限防止关键词型 key 无界增长。
-// TTL 只是兜底，抓取结束/删除条目时由 InvalidateCounts 主动失效。
+// TTL 只是兜底，抓取结束/删除条目时由 InvalidateCounts 主动失效；
+// 取值可经系统设置调整（server 注入 SetCountTTL），常量为内置默认。
 const (
 	searchCountTTL     = 60 * time.Second
 	searchCountMaxKeys = 256
@@ -345,14 +346,15 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 
 	where := strings.Join(conds, " AND ")
 
-	// 分页翻页时总数不变，count 结果按 where+参数缓存 30s，省掉重复的全量计数。
-	// 抓取写入导致的 30s 内总数偏差对分页 UI 无感。
+	// 分页翻页时总数不变，count 结果按 where+参数缓存（系统设置可调，默认 60s），
+	// 省掉重复的全量计数。抓取写入导致的 TTL 内总数偏差对分页 UI 无感。
 	countArgs := args // 快照：limit/offset 尚未追加
 	countKey := where + "|" + fmt.Sprint(args...)
+	countTTL := time.Duration(s.countTTL.Load())
 	s.countMu.Lock()
 	cached, ok := s.countCache[countKey]
 	s.countMu.Unlock()
-	countCached := ok && time.Since(cached.at) < searchCountTTL
+	countCached := ok && time.Since(cached.at) < countTTL
 
 	dir := "ASC"
 	if strings.EqualFold(q.Order, "desc") {

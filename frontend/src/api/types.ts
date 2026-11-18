@@ -115,8 +115,14 @@ export interface CrawlSettings {
   prune_on_full: boolean
 }
 
+export interface CacheSettings {
+  query_ttl: number
+  public_ttl: number
+}
+
 export interface AdminSettings {
   crawl: CrawlSettings
+  cache: CacheSettings
   bgm: {
     token: string
     cookie: string
