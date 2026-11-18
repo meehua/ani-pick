@@ -14,6 +14,7 @@ export function SearchInput({
   inputClassName,
   size = 'sm',
   showKbd = false,
+  hotkey = true,
   ariaLabel = '搜索作品',
 }: {
   value: string
@@ -24,11 +25,14 @@ export function SearchInput({
   inputClassName?: string
   size?: 'sm' | 'lg'
   showKbd?: boolean
+  /** 是否注册「/」快速聚焦；后台等场景不需要 */
+  hotkey?: boolean
   ariaLabel?: string
 }) {
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
+    if (!hotkey) return
     function onKey(e: KeyboardEvent) {
       const el = document.activeElement
       const typing =
@@ -42,7 +46,7 @@ export function SearchInput({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [hotkey])
 
   const lg = size === 'lg'
 

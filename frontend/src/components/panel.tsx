@@ -30,7 +30,9 @@ export function Panel({
       {(title || action) && (
         <CardHeader
           className={cn(
-            'flex flex-row flex-wrap items-center justify-between gap-2 border-b py-3',
+            // 分隔线用任意属性写而不挂 border-b 类——原生 CardHeader 自带的
+            // [.border-b]:pb-6 是自匹配选择器（特异性更高），会压过 py-3 导致头部上下留白不对称。
+            'flex flex-row flex-wrap items-center justify-between gap-2 py-3 [border-bottom:1px_solid_var(--border)]',
             dense ? 'px-3 py-2.5' : 'px-4',
           )}
         >

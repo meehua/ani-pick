@@ -124,7 +124,8 @@ export default function AdminPage() {
       )}
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="w-full justify-start overflow-x-auto">
+        {/* 横向可滚（窄屏），纵向裁切——原生 Tabs 的 after 下划线位会向下溢出 5px，不裁会顶出竖向滚动条 */}
+        <TabsList className="scrollbar-none w-full justify-start overflow-x-auto overflow-y-clip">
           <TabsTrigger value="overview">概览</TabsTrigger>
           <TabsTrigger value="crawl">抓取</TabsTrigger>
           <TabsTrigger value="data">数据</TabsTrigger>

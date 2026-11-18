@@ -1,10 +1,12 @@
 import * as React from 'react'
 import { Square } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
+import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableHeader, TableRow } from '@/components/ui/table'
 import { Th, Td } from '@/components/table-bits'
 import { Panel } from '@/components/panel'
@@ -97,16 +99,12 @@ export function CrawlStatusCard({
       }
     >
       <div className="flex items-center gap-2">
-        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-          <div
-            className={
-              pct === undefined
-                ? 'h-full w-1/3 animate-pulse rounded-full bg-primary'
-                : 'h-full rounded-full bg-primary transition-[width] duration-500'
-            }
-            style={pct === undefined ? undefined : { width: `${pct}%` }}
-          />
-        </div>
+        {/* 总数未知时进度不可算：占三分之一宽度并脉动示意 */}
+        <Progress
+          value={pct ?? 33}
+          aria-label="抓取进度"
+          className={cn('h-1.5 flex-1', pct === undefined && 'animate-pulse')}
+        />
         <span className="num w-10 text-right text-xs text-muted-foreground">
           {pct === undefined ? '—' : `${pct}%`}
         </span>
@@ -337,8 +335,8 @@ export function Toggle({
   hint?: string
 }) {
   return (
-    <label className="flex items-start gap-2 text-sm">
-      <Checkbox checked={checked} onCheckedChange={v => onChange(v === true)} className="mt-0.5" />
+    <label className="flex items-center gap-2 text-sm">
+      <Switch checked={checked} onCheckedChange={onChange} />
       <span>
         {label}
         {hint && <span className="mt-0.5 block text-[11px] text-muted-foreground">{hint}</span>}

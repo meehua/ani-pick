@@ -1,12 +1,12 @@
 import * as React from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Search, Trash2 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableHeader, TableRow } from '@/components/ui/table'
 import { Th, Td } from '@/components/table-bits'
 import { Panel } from '@/components/panel'
+import { SearchInput } from '@/components/search-input'
 import { adminDeleteSubject, adminRefreshSubject, adminSearchSubjects } from '../../api/client'
 import { TYPE_LABEL, TYPE_ORDER, type SearchResult } from '../../api/types'
 import { fmtDateTime, fmtNum } from '../../lib/format'
@@ -94,20 +94,14 @@ export function DataPanel({ onChange }: { onChange: () => void }) {
               patch({ q: draft.trim() || undefined, pg: undefined })
             }}
           >
-            <div className="relative">
-              <Search
-                size={14}
-                aria-hidden
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                value={draft}
-                onChange={e => setDraft(e.target.value)}
-                placeholder="按名称搜索索引"
-                aria-label="搜索索引"
-                className="h-9 w-64 pl-8"
-              />
-            </div>
+            <SearchInput
+              value={draft}
+              onChange={setDraft}
+              placeholder="按名称搜索索引"
+              ariaLabel="搜索索引"
+              className="w-64 flex-none"
+              hotkey={false}
+            />
             <Button type="submit" size="sm" variant="outline">
               检索
             </Button>
