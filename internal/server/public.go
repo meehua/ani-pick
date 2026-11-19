@@ -166,20 +166,22 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "日期格式应为 YYYY-MM-DD")
 		return
 	}
-	if q.Page > 5000 {
-		q.Page = 5000
+	snap := s.snapshot(r.Context())
+	if q.Page > snap.maxPage {
+		q.Page = snap.maxPage
 	}
-	queryTTL, publicTTL := s.cacheTTLs(r.Context())
 	key := searchCacheKey(q)
-	s.pageMu.Lock()
-	if e, ok := s.pageCache[key]; ok && time.Since(e.at) < queryTTL {
-		body := e.body
+	if snap.queryTTL > 0 { // 0 = 关闭搜索缓存：每次都回源
+		s.pageMu.Lock()
+		if e, ok := s.pageCache[key]; ok && time.Since(e.at) < snap.queryTTL {
+			body := e.body
+			s.pageMu.Unlock()
+			s.m.cacheEvent("search", "hit")
+			writeJSONTTL(w, http.StatusOK, body, snap.publicTTL)
+			return
+		}
 		s.pageMu.Unlock()
-		s.m.cacheEvent("search", "hit")
-		writeJSONTTL(w, http.StatusOK, body, publicTTL)
-		return
 	}
-	s.pageMu.Unlock()
 
 	// 缓存未命中：经单飞合并并发的同键回源（TTL 到期瞬间的重复请求只查一次库）。
 	// 查询用独立超时的后台 ctx——leader 客户端断开不应让等待中的 follower 一起失败；
@@ -196,12 +198,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, err
 		}
-		s.pageMu.Lock()
-		if len(s.pageCache) >= searchPageMaxKeys {
-			s.pageCache = map[string]cachedJSON{} // 查询组合无界，超限整体换新
+		if snap.queryTTL > 0 {
+			s.pageMu.Lock()
+			if len(s.pageCache) >= snap.maxKeys {
+				s.pageCache = map[string]cachedJSON{} // 查询组合无界，超限整体换新
+			}
+			s.pageCache[key] = cachedJSON{at: time.Now(), body: payload}
+			s.pageMu.Unlock()
 		}
-		s.pageCache[key] = cachedJSON{at: time.Now(), body: payload}
-		s.pageMu.Unlock()
 		return payload, nil
 	})
 	if merged {
@@ -213,7 +217,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	writeJSONTTL(w, http.StatusOK, body, publicTTL)
+	writeJSONTTL(w, http.StatusOK, body, snap.publicTTL)
 }
 
 func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
@@ -222,17 +226,19 @@ func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "无效的条目 ID")
 		return
 	}
-	queryTTL, publicTTL := s.cacheTTLs(r.Context())
+	snap := s.snapshot(r.Context())
 	key := strconv.FormatInt(id, 10)
-	s.detailMu.Lock()
-	if e, ok := s.detailCache[key]; ok && time.Since(e.at) < queryTTL {
-		body := e.body
+	if snap.queryTTL > 0 { // 0 = 关闭详情缓存：每次都回源
+		s.detailMu.Lock()
+		if e, ok := s.detailCache[key]; ok && time.Since(e.at) < snap.queryTTL {
+			body := e.body
+			s.detailMu.Unlock()
+			s.m.cacheEvent("detail", "hit")
+			writeJSONTTL(w, http.StatusOK, body, snap.publicTTL)
+			return
+		}
 		s.detailMu.Unlock()
-		s.m.cacheEvent("detail", "hit")
-		writeJSONTTL(w, http.StatusOK, body, publicTTL)
-		return
 	}
-	s.detailMu.Unlock()
 
 	// 单飞合并同 id 并发回源；404 不缓存——条目可能随下次抓取入库
 	body, err, merged := s.flights.do("detail:"+key, func() ([]byte, error) {
@@ -258,13 +264,15 @@ func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	s.detailMu.Lock()
-	if len(s.detailCache) >= detailCacheMaxKeys {
-		s.detailCache = map[string]cachedJSON{} // id 空间无界，超限整体换新
+	if snap.queryTTL > 0 {
+		s.detailMu.Lock()
+		if len(s.detailCache) >= snap.maxKeys {
+			s.detailCache = map[string]cachedJSON{} // id 空间无界，超限整体换新
+		}
+		s.detailCache[key] = cachedJSON{at: time.Now(), body: body}
+		s.detailMu.Unlock()
 	}
-	s.detailCache[key] = cachedJSON{at: time.Now(), body: body}
-	s.detailMu.Unlock()
-	writeJSONTTL(w, http.StatusOK, body, publicTTL)
+	writeJSONTTL(w, http.StatusOK, body, snap.publicTTL)
 }
 
 func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
@@ -275,18 +283,20 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "请求参数含非法字符")
 		return
 	}
-	queryTTL, publicTTL := s.cacheTTLs(r.Context())
+	snap := s.snapshot(r.Context())
 	key := tagCacheKey(q, types, limit)
 
-	s.tagMu.Lock()
-	if e, ok := s.tagCache[key]; ok && time.Since(e.at) < queryTTL {
-		body := e.body
+	if snap.queryTTL > 0 { // 0 = 关闭标签候选缓存：每次都回源
+		s.tagMu.Lock()
+		if e, ok := s.tagCache[key]; ok && time.Since(e.at) < snap.queryTTL {
+			body := e.body
+			s.tagMu.Unlock()
+			s.m.cacheEvent("tags", "hit")
+			writeJSONTTL(w, http.StatusOK, body, snap.publicTTL)
+			return
+		}
 		s.tagMu.Unlock()
-		s.m.cacheEvent("tags", "hit")
-		writeJSONTTL(w, http.StatusOK, body, publicTTL)
-		return
 	}
-	s.tagMu.Unlock()
 
 	// 标签候选是搜索框逐键请求的高频端点（每键一次查询），必须进程内缓存；
 	// 数据只在抓取后随 RecomputeTagUsage 变化，失效挂抓取收尾钩子，TTL 兜底。
@@ -302,12 +312,14 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, err
 		}
-		s.tagMu.Lock()
-		if len(s.tagCache) >= tagCacheMaxKeys {
-			s.tagCache = map[string]cachedJSON{} // 输入型 key 无界增长，超限整体换新
+		if snap.queryTTL > 0 {
+			s.tagMu.Lock()
+			if len(s.tagCache) >= snap.maxKeys {
+				s.tagCache = map[string]cachedJSON{} // 输入型 key 无界增长，超限整体换新
+			}
+			s.tagCache[key] = cachedJSON{at: time.Now(), body: payload}
+			s.tagMu.Unlock()
 		}
-		s.tagCache[key] = cachedJSON{at: time.Now(), body: payload}
-		s.tagMu.Unlock()
 		return payload, nil
 	})
 	if merged {
@@ -319,7 +331,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	writeJSONTTL(w, http.StatusOK, body, publicTTL)
+	writeJSONTTL(w, http.StatusOK, body, snap.publicTTL)
 }
 
 // tagCacheKey 归一化标签候选查询：关键词去空白、类型排序，等价请求共享同一份缓存。
@@ -333,32 +345,26 @@ type cachedMetaTags struct {
 	data []store.TagStat
 }
 
-// 进程内缓存的键上限（内存有界）；TTL 走系统设置，不在此写死。
-const (
-	tagCacheMaxKeys    = 256
-	detailCacheMaxKeys = 256
-
-	metaTagsTTL      = 10 * time.Minute
-	metaTagsMaxKeys  = 64
-	metaCacheTTL     = 30 * time.Second
-	overviewCacheTTL = 3 * time.Second
-)
+// 进程内缓存的键上限（内存有界）；各缓存 TTL 走系统设置（查询缓存），不在此写死。
+const metaTagsMaxKeys = 64
 
 func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 	typ := parseIntParam(r, "type", 0)
 	limit := parseIntParam(r, "limit", 40)
 	key := strconv.Itoa(typ) + ":" + strconv.Itoa(limit)
-	_, publicTTL := s.cacheTTLs(r.Context())
+	snap := s.snapshot(r.Context())
 
-	s.cacheMu.Lock()
-	if e, ok := s.metaTags[key]; ok && time.Since(e.at) < metaTagsTTL {
-		data := e.data
+	if snap.metaTagsTTL > 0 { // 0 = 关闭元标签缓存：每次都回源
+		s.cacheMu.Lock()
+		if e, ok := s.metaTags[key]; ok && time.Since(e.at) < snap.metaTagsTTL {
+			data := e.data
+			s.cacheMu.Unlock()
+			s.m.cacheEvent("meta-tags", "hit")
+			writeJSONTTL(w, http.StatusOK, mustMarshalItems(data), snap.publicTTL)
+			return
+		}
 		s.cacheMu.Unlock()
-		s.m.cacheEvent("meta-tags", "hit")
-		writeJSONTTL(w, http.StatusOK, mustMarshalItems(data), publicTTL)
-		return
 	}
-	s.cacheMu.Unlock()
 	s.m.cacheEvent("meta-tags", "origin")
 
 	items, err := s.store.MetaTagSuggest(r.Context(), typ, limit)
@@ -366,14 +372,16 @@ func (s *Server) handleMetaTags(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	s.cacheMu.Lock()
-	if len(s.metaTags) >= metaTagsMaxKeys {
-		// 参数组合有限，整体重置比逐键清理更简单
-		s.metaTags = map[string]cachedMetaTags{}
+	if snap.metaTagsTTL > 0 {
+		s.cacheMu.Lock()
+		if len(s.metaTags) >= metaTagsMaxKeys {
+			// 参数组合有限，整体重置比逐键清理更简单
+			s.metaTags = map[string]cachedMetaTags{}
+		}
+		s.metaTags[key] = cachedMetaTags{at: time.Now(), data: items}
+		s.cacheMu.Unlock()
 	}
-	s.metaTags[key] = cachedMetaTags{at: time.Now(), data: items}
-	s.cacheMu.Unlock()
-	writeJSONTTL(w, http.StatusOK, mustMarshalItems(items), publicTTL)
+	writeJSONTTL(w, http.StatusOK, mustMarshalItems(items), snap.publicTTL)
 }
 
 // mustMarshalItems 序列化标签候选列表；TagStat 字段全是基础类型，不会失败。
@@ -387,14 +395,16 @@ func mustMarshalItems(items []store.TagStat) []byte {
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
-	_, publicTTL := s.cacheTTLs(r.Context())
-	s.metaMu.Lock()
-	body, fresh := s.metaBody, time.Since(s.metaBody.at) < metaCacheTTL
-	s.metaMu.Unlock()
-	if fresh && body.body != nil {
-		s.m.cacheEvent("meta", "hit")
-		writeJSONTTL(w, http.StatusOK, body.body, publicTTL)
-		return
+	snap := s.snapshot(r.Context())
+	if snap.metaTTL > 0 { // 0 = 关闭 meta 缓存：每次都实算
+		s.metaMu.Lock()
+		body, fresh := s.metaBody, time.Since(s.metaBody.at) < snap.metaTTL
+		s.metaMu.Unlock()
+		if fresh && body.body != nil {
+			s.m.cacheEvent("meta", "hit")
+			writeJSONTTL(w, http.StatusOK, body.body, snap.publicTTL)
+			return
+		}
 	}
 	s.m.cacheEvent("meta", "origin")
 
@@ -413,8 +423,10 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	s.metaMu.Lock()
-	s.metaBody = cachedJSON{at: time.Now(), body: payload}
-	s.metaMu.Unlock()
-	writeJSONTTL(w, http.StatusOK, payload, publicTTL)
+	if snap.metaTTL > 0 {
+		s.metaMu.Lock()
+		s.metaBody = cachedJSON{at: time.Now(), body: payload}
+		s.metaMu.Unlock()
+	}
+	writeJSONTTL(w, http.StatusOK, payload, snap.publicTTL)
 }

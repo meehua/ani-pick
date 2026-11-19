@@ -118,11 +118,28 @@ export interface CrawlSettings {
 export interface CacheSettings {
   query_ttl: number
   public_ttl: number
+  meta_ttl: number
+  meta_tags_ttl: number
+  overview_ttl: number
+  max_keys: number
+}
+
+// 限流与会话安全参数（管理后台「设置 → 限流与安全」可调）
+export interface SecuritySettings {
+  rate_limit_rps: number
+  rate_limit_burst: number
+  login_rpm: number
+  login_burst: number
+  login_delay_ms: number
+  session_ttl_days: number
+  limiter_max_ips: number
+  max_page: number
 }
 
 export interface AdminSettings {
   crawl: CrawlSettings
   cache: CacheSettings
+  security: SecuritySettings
   bgm: {
     token: string
     cookie: string

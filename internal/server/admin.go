@@ -22,13 +22,16 @@ func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
 // handleAdminOverview 聚合 6+ 条统计 SQL；前端每 4s 轮询，
 // 加 3s TTL 缓存把空闲时的持续轮询开销压到接近零，抓取等动作后主动失效。
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
-	s.overviewMu.Lock()
-	body, fresh := s.overview, time.Since(s.overview.at) < overviewCacheTTL
-	s.overviewMu.Unlock()
-	if fresh && body.body != nil {
-		s.m.cacheEvent("overview", "hit")
-		writeJSONBytes(w, http.StatusOK, body.body)
-		return
+	snap := s.snapshot(r.Context())
+	if snap.overviewTTL > 0 { // 0 = 关闭 overview 缓存：每次都实算
+		s.overviewMu.Lock()
+		body, fresh := s.overview, time.Since(s.overview.at) < snap.overviewTTL
+		s.overviewMu.Unlock()
+		if fresh && body.body != nil {
+			s.m.cacheEvent("overview", "hit")
+			writeJSONBytes(w, http.StatusOK, body.body)
+			return
+		}
 	}
 	s.m.cacheEvent("overview", "origin")
 
@@ -83,9 +86,10 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 type adminSettingsPayload struct {
-	Crawl store.CrawlSettings `json:"crawl"`
-	Cache store.CacheSettings `json:"cache"`
-	BGM   struct {
+	Crawl    store.CrawlSettings    `json:"crawl"`
+	Cache    store.CacheSettings    `json:"cache"`
+	Security store.SecuritySettings `json:"security"`
+	BGM      struct {
 		Token       string `json:"token"`
 		Cookie      string `json:"cookie"`
 		ClearToken  bool   `json:"clear_token"`
@@ -101,8 +105,9 @@ func (s *Server) handleAdminGetSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	masked := settings.Mask()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"crawl": masked.Crawl,
-		"cache": masked.Cache,
+		"crawl":    masked.Crawl,
+		"cache":    masked.Cache,
+		"security": masked.Security,
 		"bgm": map[string]any{
 			"token":             masked.BGM.Token,
 			"cookie":            masked.BGM.Cookie,
@@ -128,6 +133,7 @@ func (s *Server) handleAdminPutSettings(w http.ResponseWriter, r *http.Request) 
 	next := cur
 	next.Crawl = payload.Crawl
 	next.Cache = payload.Cache
+	next.Security = payload.Security
 
 	if payload.BGM.ClearToken {
 		next.BGM.Token = ""
@@ -327,18 +333,19 @@ func (s *Server) handleAdminPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 使旧会话全部失效，并为当前浏览器换发新会话。
+	// 使旧会话全部失效，并为当前浏览器换发新会话（有效期走系统设置）。
 	_ = s.store.DeleteAllSessions(r.Context())
+	snap := s.snapshot(r.Context())
 	buf := make([]byte, 32)
 	_, _ = rand.Read(buf)
 	token := hex.EncodeToString(buf)
-	if err := s.store.CreateSession(r.Context(), token, sessionTTL); err != nil {
+	if err := s.store.CreateSession(r.Context(), token, snap.sessionTTL); err != nil {
 		internalError(w, err)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: adminCookie, Value: token, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, Secure: cookieSecure(r), MaxAge: int(sessionTTL.Seconds()),
+		SameSite: http.SameSiteLaxMode, Secure: cookieSecure(r), MaxAge: int(snap.sessionTTL.Seconds()),
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

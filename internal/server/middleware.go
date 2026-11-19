@@ -131,26 +131,30 @@ func (s *Server) trustedProxy(remote string) bool {
 	return false
 }
 
-// limiterEntriesMax 是限流表的条目上限（1GB 机器内存红线：进程内缓存必须带上限）。
-// 新 IP 插入前腾位：先清 10 分钟未活跃的条目，仍满则强制淘汰最久未活跃的——
-// 独特 IP 洪泛（经可信反代头的伪造值或真实 IPv6 潮汐）能把条目数推满，
-// 必须有硬界兜底。O(n) 扫描只在表满时触发；被淘汰的 IP 会拿到满桶，
-// 属限流精度换内存安全的取舍。
+// limiterEntriesMax 是限流表条目上限的兜底默认值（1GB 机器内存红线：进程内
+// 缓存必须带上限）；实际取值走系统设置（SecuritySettings.limiter_max_ips），
+// 经 allow 的 maxEntries 参数注入。新 IP 插入前腾位：先清 10 分钟未活跃的
+// 条目，仍满则强制淘汰最久未活跃的——独特 IP 洪泛（经可信反代头的伪造值或
+// 真实 IPv6 潮汐）能把条目数推满，必须有硬界。O(n) 扫描只在表满时触发；
+// 被淘汰的 IP 会拿到满桶，属限流精度换内存安全的取舍。
 const limiterEntriesMax = 4096
 
-func (l *limiter) allow(key string, rate, burst float64) bool {
+func (l *limiter) allow(key string, rate, burst float64, maxEntries int) bool {
+	if maxEntries <= 0 {
+		maxEntries = limiterEntriesMax
+	}
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	b, ok := l.entries[key]
 	if !ok {
-		if len(l.entries) >= limiterEntriesMax {
+		if len(l.entries) >= maxEntries {
 			for k, e := range l.entries {
 				if now.Sub(e.last) > 10*time.Minute {
 					delete(l.entries, k)
 				}
 			}
-			for len(l.entries) >= limiterEntriesMax {
+			for len(l.entries) >= maxEntries {
 				oldestKey := ""
 				oldest := now
 				for k, e := range l.entries {
@@ -189,7 +193,9 @@ func (s *Server) generalLimit(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !s.limits.allow(s.clientIP(r), 30, 120) {
+		// 速率/突发/IP 上限走系统设置（限流与安全），60s 快照 + 保存后立刷
+		snap := s.snapshot(r.Context())
+		if !s.limits.allow(s.clientIP(r), snap.rateRPS, snap.rateBurst, snap.limiterMaxIPs) {
 			fail(w, http.StatusTooManyRequests, "rate_limited", "请求过于频繁，请稍后再试", "")
 			return
 		}

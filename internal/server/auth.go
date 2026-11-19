@@ -13,8 +13,6 @@ import (
 
 const adminCookie = "anipick_admin"
 
-const sessionTTL = 7 * 24 * time.Hour
-
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(adminCookie)
@@ -58,7 +56,9 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
-	if !s.limits.allow("login:"+s.clientIP(r), 0.08, 6) {
+	// 登录节流/惩罚/会话有效期走系统设置（限流与安全），60s 快照 + 保存后立刷
+	snap := s.snapshot(r.Context())
+	if !s.limits.allow("login:"+s.clientIP(r), snap.loginRate, float64(snap.loginBurst), snap.limiterMaxIPs) {
 		fail(w, http.StatusTooManyRequests, "rate_limited", "尝试过于频繁，请稍后再试", "")
 		return
 	}
@@ -80,7 +80,9 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		time.Sleep(300 * time.Millisecond)
+		if snap.loginDelay > 0 {
+			time.Sleep(snap.loginDelay)
+		}
 		fail(w, http.StatusUnauthorized, "invalid_password", "密码错误", "")
 		return
 	}
@@ -91,7 +93,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := hex.EncodeToString(buf)
-	if err := s.store.CreateSession(r.Context(), token, sessionTTL); err != nil {
+	if err := s.store.CreateSession(r.Context(), token, snap.sessionTTL); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -102,7 +104,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   cookieSecure(r),
-		MaxAge:   int(sessionTTL.Seconds()),
+		MaxAge:   int(snap.sessionTTL.Seconds()),
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

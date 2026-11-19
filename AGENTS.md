@@ -34,11 +34,14 @@ HTML 与 API 每次回源）。以下约束是实现里已经落地的取舍，�
   所以静态必须缓存、动态按需压、禁用 L9。
 - **热点只读查询必须有 TTL 缓存**：搜索总数（`store.Search` 的 count 缓存）、
   搜索页结果、`/api/tags` 标签候选、条目详情 `/api/subjects/{id}`（按 id、上限
-  256 键）共用 `query_ttl`（默认 60s）；公开 GET 响应 `Cache-Control` 用
-  `public_ttl`（默认 30s）——两者存系统设置（`AppSettings.Cache`，管理后台
+  `max_keys` 键）共用 `query_ttl`（默认 60s）；公开 GET 响应 `Cache-Control` 用
+  `public_ttl`（默认 30s）——连同 `/api/meta`（`meta_ttl` 30s）、`/api/meta-tags`
+  （`meta_tags_ttl` 10 分钟）、`/api/admin/overview`（`overview_ttl` 3s，抓取/设置
+  等动作后 `invalidateOverview()`）全部存系统设置（`AppSettings.Cache`，管理后台
   「设置 → 查询缓存」可调），server 侧 60s 快照 + 保存设置后立刷，禁止在
-  handler 里写死 TTL。`/api/meta`（30s）、`/api/meta-tags`（10 分钟、多键）、
-  `/api/admin/overview`（3s，抓取/设置等动作后 `invalidateOverview()`）为固定值。
+  handler 里写死 TTL。TTL 语义：**0 = 关闭该层缓存**（跳过读写，浏览器缓存退回
+  no-store）、不填/负值回落默认（兼容旧库数据）、正值只钳下限 5s（overview 1s、
+  元标签 10s），不设上限——失效靠显式钩子，可设任意长。
   列表类数据只在抓取与条目级操作后变化，失效统一走抓取收尾钩子
   （`crawler.OnRunFinished` → `invalidateQueryCaches`，含 count）与管理端
   刷新/删除（`invalidateSubject(id)` / `invalidateQueryCaches`），TTL 只兜底；

@@ -9,7 +9,7 @@ import { Panel } from '@/components/panel'
 import {
   adminChangePassword, adminNetwork, adminSaveSettings, adminTestCredential,
 } from '../../api/client'
-import type { AdminSettings, CacheSettings, CrawlSettings, NetworkStatus } from '../../api/types'
+import type { AdminSettings, CacheSettings, CrawlSettings, NetworkStatus, SecuritySettings } from '../../api/types'
 import { TYPE_LABEL, TYPE_ORDER } from '../../api/types'
 import { NumField, Toggle } from './parts'
 
@@ -24,6 +24,7 @@ export function SettingsPanel({
 }) {
   const [crawl, setCrawl] = React.useState<CrawlSettings>(settings.crawl)
   const [cache, setCache] = React.useState<CacheSettings>(settings.cache)
+  const [security, setSecurity] = React.useState<SecuritySettings>(settings.security)
   const [token, setToken] = React.useState('')
   const [cookie, setCookie] = React.useState('')
   const [clearToken, setClearToken] = React.useState(false)
@@ -56,6 +57,7 @@ export function SettingsPanel({
   React.useEffect(() => {
     setCrawl(settings.crawl)
     setCache(settings.cache)
+    setSecurity(settings.security)
   }, [settings])
 
   function set<K extends keyof CrawlSettings>(key: K, value: CrawlSettings[K]) {
@@ -66,12 +68,17 @@ export function SettingsPanel({
     setCache(c => ({ ...c, [key]: value }))
   }
 
+  function setSecField<K extends keyof SecuritySettings>(key: K, value: SecuritySettings[K]) {
+    setSecurity(s => ({ ...s, [key]: value }))
+  }
+
   async function save() {
     setBusy(true)
     try {
       await adminSaveSettings({
         crawl,
         cache,
+        security,
         bgm: {
           token: token.trim() || undefined,
           cookie: cookie.trim() || undefined,
@@ -158,20 +165,102 @@ export function SettingsPanel({
       <Panel title="查询缓存" contentClassName="space-y-3">
           <p className="text-xs leading-relaxed text-muted-foreground">
             搜索页 / 搜索总数 / 标签候选 / 条目详情共用进程内结果缓存，抓取收尾与管理端删改条目时会主动失效，
-            这里的 TTL 只是兜底。数据量小、流量高的站点调大更省 CPU，改勤的站点调小更即时。
+            这里的 TTL 只是兜底，不设上限。填 0 = 关闭该层缓存（每次都实查，排查问题时用）。
+            注意「浏览器缓存」是浏览器与 CF 边缘按 max-age 自然过期，不会随抓取主动失效——设得很大意味着访问者会长期看到旧列表。
           </p>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <NumField
               label="查询结果缓存 (s)"
               value={cache.query_ttl}
               onChange={v => setCacheField('query_ttl', v)}
-              hint="5–86400，0 = 默认 60"
+              hint="0 = 关闭；默认 60"
             />
             <NumField
               label="浏览器缓存 max-age (s)"
               value={cache.public_ttl}
               onChange={v => setCacheField('public_ttl', v)}
-              hint="5–86400，0 = 默认 30"
+              hint="0 = 关闭（no-store）；默认 30"
+            />
+            <NumField
+              label="首页元信息缓存 (s)"
+              value={cache.meta_ttl}
+              onChange={v => setCacheField('meta_ttl', v)}
+              hint="0 = 关闭；默认 30"
+            />
+            <NumField
+              label="元标签候选缓存 (s)"
+              value={cache.meta_tags_ttl}
+              onChange={v => setCacheField('meta_tags_ttl', v)}
+              hint="0 = 关闭；默认 600"
+            />
+            <NumField
+              label="后台总览缓存 (s)"
+              value={cache.overview_ttl}
+              onChange={v => setCacheField('overview_ttl', v)}
+              hint="0 = 关闭；默认 3；后台 4s 轮询"
+            />
+            <NumField
+              label="缓存键上限"
+              value={cache.max_keys}
+              onChange={v => setCacheField('max_keys', v)}
+              hint="16–10000，默认 256；搜索/标签/详情/总数共用"
+            />
+          </div>
+      </Panel>
+
+      <Panel title="限流与安全" contentClassName="space-y-3">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            限流按 IP 计数（经 Cloudflare/可信反代时取真实 IP 头），令牌桶算法：超出突发容量后按速率匀速补充。
+            调低防爬防刷，调高应对大流量；0 = 恢复默认值。改动保存后立即生效，无需重启。
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <NumField
+              label="请求速率 (次/秒/IP)"
+              value={security.rate_limit_rps}
+              onChange={v => setSecField('rate_limit_rps', v)}
+              hint="1–1000，默认 30"
+            />
+            <NumField
+              label="请求突发容量"
+              value={security.rate_limit_burst}
+              onChange={v => setSecField('rate_limit_burst', v)}
+              hint="10–10000，默认 120"
+            />
+            <NumField
+              label="登录速率 (次/分/IP)"
+              value={security.login_rpm}
+              onChange={v => setSecField('login_rpm', v)}
+              hint="1–60，默认 5；防密码爆破"
+            />
+            <NumField
+              label="登录突发容量"
+              value={security.login_burst}
+              onChange={v => setSecField('login_burst', v)}
+              hint="1–100，默认 6"
+            />
+            <NumField
+              label="错误密码延迟 (ms)"
+              value={security.login_delay_ms}
+              onChange={v => setSecField('login_delay_ms', v)}
+              hint="0–2000，默认 300；拉高爆破成本"
+            />
+            <NumField
+              label="会话有效期 (天)"
+              value={security.session_ttl_days}
+              onChange={v => setSecField('session_ttl_days', v)}
+              hint="1–90，默认 7；对新会话生效"
+            />
+            <NumField
+              label="限流表 IP 上限"
+              value={security.limiter_max_ips}
+              onChange={v => setSecField('limiter_max_ips', v)}
+              hint="256–65536，默认 4096；内存有界"
+            />
+            <NumField
+              label="公开搜索最大页码"
+              value={security.max_page}
+              onChange={v => setSecField('max_page', v)}
+              hint="100–100000，默认 5000；深分页成本上限"
             />
           </div>
       </Panel>

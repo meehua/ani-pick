@@ -32,10 +32,15 @@ func writeJSONBytes(w http.ResponseWriter, status int, body []byte) {
 }
 
 // writeJSONTTL 写出可缓存的公开 JSON：浏览器与（配置了 Cache Rule 的）Cloudflare
-// 按 max-age 缓存；错误响应不走这里，仍保持 no-store。
+// 按 max-age 缓存；ttl <= 0 表示浏览器缓存已关闭（public_ttl=0），退回 no-store。
+// 错误响应不走这里，仍保持 no-store。
 func writeJSONTTL(w http.ResponseWriter, status int, body []byte, ttl time.Duration) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(int(ttl.Seconds())))
+	if ttl <= 0 {
+		w.Header().Set("Cache-Control", "no-store")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(int(ttl.Seconds())))
+	}
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 }

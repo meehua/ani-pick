@@ -55,12 +55,11 @@ type Server struct {
 
 	flights flightGroup
 
-	// 缓存参数快照（系统设置 → 查询缓存）：启动时读一次，运行期 60s 惰性刷新、
-	// 保存设置后立刷——公开热路径不因设置引入每请求查询。
-	cfgMu     sync.Mutex
-	cfgAt     time.Time
-	cacheTTL  time.Duration // 搜索页/总数/标签候选/详情共用
-	publicTTL time.Duration // 公开 GET 响应 Cache-Control max-age
+	// 运行参数快照（系统设置 → 查询缓存/限流与安全）：启动时读一次，运行期 60s
+	// 惰性刷新、保存设置后立刷——公开热路径不因设置引入每请求查询。
+	cfgMu sync.Mutex
+	cfgAt time.Time
+	cfg   cfgSnapshot
 
 	m *metrics
 }
@@ -104,19 +103,20 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 		pageCache:      map[string]cachedJSON{},
 		tagCache:       map[string]cachedJSON{},
 		detailCache:    map[string]cachedJSON{},
-		cacheTTL:       defaultQueryTTL,
-		publicTTL:      defaultPublicTTL,
 		clientIPHeader: strings.TrimSpace(opts.ClientIPHeader),
 		trustedCIDRs:   opts.TrustedProxyCIDRs,
 		m:              newMetrics(),
 	}
-	// 启动即同步一次系统设置的缓存参数；失败先落默认值，运行期惰性重试
+	// 启动即同步一次运行参数（缓存/限流/会话）；失败先落默认值，运行期惰性重试
+	def := defaults
+	def.Normalize()
+	s.applySnapshot(def)
 	if st.Pool != nil {
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if settings, err := st.LoadSettings(sctx, defaults); err != nil {
-			slog.Warn("读取缓存设置失败，使用默认值", "err", err)
+			slog.Warn("读取运行参数失败，使用默认值", "err", err)
 		} else {
-			s.applyCacheSettings(settings.Cache)
+			s.applySnapshot(settings)
 		}
 		cancel()
 	}
@@ -202,35 +202,66 @@ func (s *Server) invalidateSubject(id int64) {
 	s.detailMu.Unlock()
 }
 
-// 缓存参数默认值与快照刷新周期；实际值存系统设置（AppSettings.Cache），
-// 管理后台「设置 → 查询缓存」可调。
-const (
-	defaultQueryTTL    = 60 * time.Second
-	defaultPublicTTL   = 30 * time.Second
-	cacheCfgRefreshTTL = 60 * time.Second
-)
+// 快照刷新周期；实际参数存系统设置（AppSettings.Cache/Security），
+// 管理后台「设置 → 查询缓存 / 限流与安全」可调。
+const cacheCfgRefreshTTL = 60 * time.Second
 
-// applyCacheSettings 落快照并同步 store 的 count TTL。
-func (s *Server) applyCacheSettings(c store.CacheSettings) {
-	s.cacheTTL = time.Duration(c.QueryTTL) * time.Second
-	s.publicTTL = time.Duration(c.PublicTTL) * time.Second
-	s.store.SetCountTTL(s.cacheTTL)
+// cfgSnapshot 是公开热路径用的运行参数快照，避免每请求读设置。
+type cfgSnapshot struct {
+	queryTTL      time.Duration // 搜索页/总数/标签候选/详情共用
+	publicTTL     time.Duration // 公开 GET 响应 Cache-Control max-age
+	metaTTL       time.Duration // /api/meta
+	metaTagsTTL   time.Duration // /api/meta-tags
+	overviewTTL   time.Duration // /api/admin/overview
+	maxKeys       int           // 搜索页/标签候选/详情/搜索总数缓存的键上限
+	rateRPS       float64       // 每 IP 常规请求速率（次/秒）
+	rateBurst     float64       // 每 IP 常规请求突发容量
+	loginRate     float64       // 登录尝试稳态速率（次/秒）
+	loginBurst    int           // 登录尝试突发容量
+	loginDelay    time.Duration // 密码错误的响应延迟
+	sessionTTL    time.Duration // 管理员会话有效期
+	limiterMaxIPs int           // 限流表 IP 条目硬上限
+	maxPage       int           // 公开搜索最大页码
 }
 
-// cacheTTLs 返回当前缓存参数：快照 60s 内复用，过期才读一次设置；
+// applySnapshot 落运行参数快照并同步 store 的 count 缓存 TTL 与键上限。
+// TTL 为 0 表示关闭对应缓存，各消费方按 <=0 跳过缓存读写。
+func (s *Server) applySnapshot(settings store.AppSettings) {
+	c, sec := settings.Cache, settings.Security
+	s.cfg = cfgSnapshot{
+		queryTTL:      time.Duration(store.CacheSec(c.QueryTTL, 60)) * time.Second,
+		publicTTL:     time.Duration(store.CacheSec(c.PublicTTL, 30)) * time.Second,
+		metaTTL:       time.Duration(store.CacheSec(c.MetaTTL, 30)) * time.Second,
+		metaTagsTTL:   time.Duration(store.CacheSec(c.MetaTagsTTL, 600)) * time.Second,
+		overviewTTL:   time.Duration(store.CacheSec(c.OverviewTTL, 3)) * time.Second,
+		maxKeys:       c.MaxKeys,
+		rateRPS:       float64(sec.RateLimitRPS),
+		rateBurst:     float64(sec.RateLimitBurst),
+		loginRate:     float64(sec.LoginRPM) / 60,
+		loginBurst:    sec.LoginBurst,
+		loginDelay:    time.Duration(sec.LoginDelayMS) * time.Millisecond,
+		sessionTTL:    time.Duration(sec.SessionTTLDays) * 24 * time.Hour,
+		limiterMaxIPs: sec.LimiterMaxIPs,
+		maxPage:       sec.MaxPage,
+	}
+	s.store.SetCountTTL(s.cfg.queryTTL)
+	s.store.SetCountCap(s.cfg.maxKeys)
+}
+
+// snapshot 返回当前运行参数：快照 60s 内复用，过期才读一次设置；
 // 读失败沿用上一次取值（无取值时保留默认），不阻塞公开热路径。
-func (s *Server) cacheTTLs(ctx context.Context) (queryTTL, publicTTL time.Duration) {
+func (s *Server) snapshot(ctx context.Context) cfgSnapshot {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 	if time.Since(s.cfgAt) > cacheCfgRefreshTTL {
 		if settings, err := s.store.LoadSettings(ctx, s.defaults); err == nil {
-			s.applyCacheSettings(settings.Cache)
+			s.applySnapshot(settings)
 		} else {
-			slog.Warn("刷新缓存设置失败，沿用上一次取值", "err", err)
+			slog.Warn("刷新运行参数失败，沿用上一次取值", "err", err)
 		}
 		s.cfgAt = time.Now()
 	}
-	return s.cacheTTL, s.publicTTL
+	return s.cfg
 }
 
 // invalidateCacheConfig 丢弃设置快照，下一次请求重新读取（保存设置后调用）。

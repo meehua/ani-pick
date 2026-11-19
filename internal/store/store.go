@@ -25,6 +25,8 @@ type Store struct {
 	countCache map[string]countEntry
 	// countTTL 是搜索总数缓存 TTL，server 按系统设置注入（SetCountTTL），0 前取内置默认。
 	countTTL atomic.Int64
+	// countCap 是搜索总数缓存键上限，server 按系统设置注入（SetCountCap），0 前取内置默认。
+	countCap atomic.Int64
 }
 
 func New(pool *pgxpool.Pool, box *secretbox.Box) *Store {
@@ -35,15 +37,25 @@ func New(pool *pgxpool.Pool, box *secretbox.Box) *Store {
 		countCache: map[string]countEntry{},
 	}
 	st.countTTL.Store(int64(searchCountTTL))
+	st.countCap.Store(int64(searchCountMaxKeys))
 	return st
 }
 
-// SetCountTTL 设置搜索总数缓存 TTL（server 从系统设置同步）；≤0 恢复内置默认。
+// SetCountTTL 设置搜索总数缓存 TTL（server 从系统设置同步）：
+// 0 = 关闭 count 缓存（Search 跳过读写）；负值恢复内置默认。
 func (s *Store) SetCountTTL(d time.Duration) {
-	if d <= 0 {
+	if d < 0 {
 		d = searchCountTTL
 	}
 	s.countTTL.Store(int64(d))
+}
+
+// SetCountCap 设置搜索总数缓存键上限（server 从系统设置同步）；≤0 恢复内置默认。
+func (s *Store) SetCountCap(n int) {
+	if n <= 0 {
+		n = searchCountMaxKeys
+	}
+	s.countCap.Store(int64(n))
 }
 
 // InvalidateCounts 清空搜索总数缓存（抓取结束/删除条目后调用），

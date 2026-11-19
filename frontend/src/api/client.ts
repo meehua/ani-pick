@@ -141,6 +141,7 @@ export const adminNetwork = () => apiGet<NetworkStatus>('/api/admin/network')
 export interface SettingsPayload {
   crawl: AdminSettings['crawl']
   cache: AdminSettings['cache']
+  security: AdminSettings['security']
   bgm: { token?: string; cookie?: string; clear_token?: boolean; clear_cookie?: boolean }
 }
 

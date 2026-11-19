@@ -346,14 +346,18 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 
 	where := strings.Join(conds, " AND ")
 
-	// 分页翻页时总数不变，count 结果按 where+参数缓存（系统设置可调，默认 60s），
-	// 省掉重复的全量计数。抓取写入导致的 TTL 内总数偏差对分页 UI 无感。
+	// 分页翻页时总数不变，count 结果按 where+参数缓存（系统设置可调，默认 60s，
+	// 0 = 关闭），省掉重复的全量计数。抓取写入导致的 TTL 内总数偏差对分页 UI 无感。
 	countArgs := args // 快照：limit/offset 尚未追加
 	countKey := where + "|" + fmt.Sprint(args...)
 	countTTL := time.Duration(s.countTTL.Load())
-	s.countMu.Lock()
-	cached, ok := s.countCache[countKey]
-	s.countMu.Unlock()
+	var cached countEntry
+	var ok bool
+	if countTTL > 0 {
+		s.countMu.Lock()
+		cached, ok = s.countCache[countKey]
+		s.countMu.Unlock()
+	}
 	countCached := ok && time.Since(cached.at) < countTTL
 
 	dir := "ASC"
@@ -432,12 +436,14 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 		if cErr != nil {
 			return out, cErr
 		}
-		s.countMu.Lock()
-		if len(s.countCache) >= searchCountMaxKeys {
-			s.countCache = map[string]countEntry{} // 用户输入型 key 无界增长，超限直接换新
+		if countTTL > 0 { // 0 = 关闭 count 缓存：每次都实算，不落缓存
+			s.countMu.Lock()
+			if len(s.countCache) >= int(s.countCap.Load()) {
+				s.countCache = map[string]countEntry{} // 用户输入型 key 无界增长，超限直接换新
+			}
+			s.countCache[countKey] = countEntry{total: out.Total, at: time.Now()}
+			s.countMu.Unlock()
 		}
-		s.countCache[countKey] = countEntry{total: out.Total, at: time.Now()}
-		s.countMu.Unlock()
 	}
 	defer rows.Close()
 
