@@ -176,10 +176,12 @@ export function TagBars({ tags }: { tags: TagVote[] }) {
   const max = sorted[0]?.votes ?? 1
 
   // 动态边缘遮罩：左有内容才虚化左侧，右有内容才虚化右侧。
+  // 虚化带宽两侧一致，且等于内容留白（px-5 = 20px）——只糊留白区，两端的柱子
+  // 都是完整滑入，左右到边的行为对称。
   const stops: string[] = []
-  if (edge.left) stops.push('transparent', 'black 18px')
+  if (edge.left) stops.push('transparent', 'black 20px')
   else stops.push('black')
-  if (edge.right) stops.push('black calc(100% - 26px)', 'transparent')
+  if (edge.right) stops.push('black calc(100% - 20px)', 'transparent')
   else stops.push('black')
   const mask = `linear-gradient(to right, ${stops.join(', ')})`
 
