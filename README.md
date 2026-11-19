@@ -359,6 +359,15 @@ git push origin v1.0.0
    - `latest`（非预发布标签）
 5. 用 `git log <上一个 tag>..<当前 tag>` 生成 Release 日志，创建或更新 GitHub Release。
 
+### 版本标识
+
+版本标识为 `版本号-提交哈希`（如 `0.1.2-4f2a9c1`），由 tag 推导的 `VERSION` 与 `git rev-parse --short HEAD` 组成，构建时同源注入前后端：
+
+- Go 二进制：`-ldflags "-X main.version=… -X main.commit=…"`（Dockerfile / release.yml 已接好）；
+- 前端：vite 构建注入 `__APP_BUILD__`，Docker 构建经 `ANIPICK_VERSION` / `ANIPICK_COMMIT` 与 Go 侧取同一组值。
+
+运行期页脚 logo 右侧展示服务端标识（`/api/meta` 的 `build` 字段），前端加载后与自身 `__APP_BUILD__` 比对：不一致则弹窗引导刷新（浏览器/CDN 缓存旧页面时会出现）；本地裸构建（无 ldflags）标识退化为 `dev`，视为开发实例不弹窗；vite dev 模式不弹窗，仅在页脚版本处提示不一致。
+
 容器运行示例：
 
 ```bash

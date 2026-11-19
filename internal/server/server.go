@@ -29,6 +29,7 @@ type Server struct {
 	static   fs.FS
 	limits   *limiter
 	version  string
+	commit   string
 
 	httpClient     *http.Client
 	resolver       *netx.Resolver
@@ -76,8 +77,18 @@ type Options struct {
 	Resolver          *netx.Resolver
 	EgressProxy       bool
 	Version           string
+	Commit            string
 	ClientIPHeader    string
 	TrustedProxyCIDRs []*net.IPNet
+}
+
+// buildID 返回组合版本标识 "版本号-提交哈希"，页脚展示、前端一致性检测共用。
+// 提交哈希缺省（本地裸构建 main.commit="none"）时退化为仅版本号。
+func (s *Server) buildID() string {
+	if s.commit == "" || s.commit == "none" {
+		return s.version
+	}
+	return s.version + "-" + s.commit
 }
 
 func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts Options) (*Server, error) {
@@ -96,6 +107,7 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 		static:         sub,
 		limits:         newLimiter(),
 		version:        ver,
+		commit:         opts.Commit,
 		httpClient:     opts.HTTPClient,
 		resolver:       opts.Resolver,
 		egressProxy:    opts.EgressProxy,

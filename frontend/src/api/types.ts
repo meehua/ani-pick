@@ -164,6 +164,10 @@ export interface AdminOverview {
 export interface MetaResponse {
   name: string
   version: string
+  /** 提交哈希（本地裸构建为 none） */
+  commit?: string
+  /** 组合版本标识 version-commit；旧后端可能缺失，缺失时不做前后端一致性判定 */
+  build?: string
   stats: Stats
   crawler: CrawlState
 }

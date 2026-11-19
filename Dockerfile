@@ -2,6 +2,10 @@
 
 FROM node:24-alpine AS frontend
 WORKDIR /src/frontend
+# 版本标识与 Go 侧 ldflags 同源注入（vite.config.ts 读取，组成前端 __APP_BUILD__）
+ARG VERSION=dev
+ARG COMMIT=none
+ENV ANIPICK_VERSION=$VERSION ANIPICK_COMMIT=$COMMIT
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./

@@ -141,6 +141,7 @@ func main() {
 		Resolver:          resolver,
 		EgressProxy:       proxyConfigured,
 		Version:           version,
+		Commit:            commit,
 		ClientIPHeader:    cfg.ClientIPHeader,
 		TrustedProxyCIDRs: trustedCIDRs,
 	})

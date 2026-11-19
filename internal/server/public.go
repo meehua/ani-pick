@@ -416,6 +416,8 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	payload, err := json.Marshal(map[string]any{
 		"name":    "AniPick",
 		"version": s.version,
+		"commit":  s.commit,
+		"build":   s.buildID(),
 		"stats":   stats,
 		"crawler": s.crawler.Status(),
 	})

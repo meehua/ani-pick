@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { AuthDialogProvider, useAuthDialog } from '@/components/auth-dialog-provider'
 import { useTheme, type Theme } from '@/components/theme-provider'
+import { BuildStatus } from '@/components/build-status'
 import { RouteLoading } from '@/components/ui-kit'
 import { useCredential } from './lib/credential'
 import HomePage from './pages/HomePage'
@@ -228,6 +229,7 @@ function Shell() {
                   A
                 </span>
                 <span className="text-sm font-semibold">AniPick</span>
+                <BuildStatus />
               </div>
             </div>
             <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
