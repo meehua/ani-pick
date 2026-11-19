@@ -31,11 +31,11 @@ export function SubjectFallback({
       <BackLink to="/browse">返回索引</BackLink>
       {index ? (
         <>
-          <div className="grid gap-5 sm:grid-cols-[150px_minmax(0,1fr)]">
+          <div className="grid max-sm:grid-cols-[110px_minmax(0,1fr)] gap-4 sm:grid-cols-[150px_minmax(0,1fr)] sm:gap-5">
             <Cover
               src={index.image}
               alt={titleOf(index)}
-              className="aspect-[5/7] w-28 rounded-lg border sm:w-full"
+              className="aspect-[5/7] w-full rounded-lg border"
             />
             <div className="min-w-0">
               <Badge variant="secondary">{TYPE_LABEL[index.type] ?? '其他'}</Badge>

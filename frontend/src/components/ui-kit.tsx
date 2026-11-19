@@ -13,12 +13,15 @@ export function PageHead({
   aside,
   back,
   className,
+  compact,
 }: {
   title: ReactNode
   description?: ReactNode
   aside?: ReactNode
   back?: ReactNode
   className?: string
+  /** compact：描述在窄屏隐藏，把纵向空间让给内容 */
+  compact?: boolean
 }) {
   return (
     <div className={cn('flex flex-wrap items-start justify-between gap-4 pb-4', className)}>
@@ -28,7 +31,12 @@ export function PageHead({
           {title}
         </h1>
         {description && (
-          <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-muted-foreground">
+          <p
+            className={cn(
+              'mt-1 max-w-3xl text-[13px] leading-relaxed text-muted-foreground',
+              compact && 'max-sm:hidden',
+            )}
+          >
             {description}
           </p>
         )}
@@ -127,7 +135,7 @@ export function RemovableChip({
   maxWidth?: string
 }) {
   return (
-    <Badge variant="secondary" className="gap-1 pr-1 font-normal">
+    <Badge variant="secondary" className="shrink-0 gap-1 pr-1 font-normal">
       <span className={cn('truncate', maxWidth)}>{label}</span>
       <button
         type="button"

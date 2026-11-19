@@ -195,7 +195,8 @@ function Shell() {
         跳到主要内容
       </a>
 
-      <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur">
+      {/* 窄屏顶栏随页面滚走（导航已由底部 TabBar 承担），浏览时不再常驻占位 */}
+      <header className="border-b bg-background/90 backdrop-blur md:sticky md:top-0 md:z-40">
         <div className="mx-auto flex h-16 max-w-[1200px] items-center gap-3 px-4 sm:px-6">
           <Wordmark />
           <TopNav />
@@ -207,7 +208,7 @@ function Shell() {
         </div>
       </header>
 
-      <main id="main" className="mx-auto w-full max-w-[1200px] px-4 pb-24 pt-6 sm:px-6 md:pb-10">
+      <main id="main" className="mx-auto w-full max-w-[1200px] px-4 pb-24 pt-4 sm:px-6 sm:pt-6 md:pb-10">
         <Suspense fallback={<RouteLoading />}>
           <div key={location.pathname} className="page-in">
             <Routes>

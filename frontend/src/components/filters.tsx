@@ -597,8 +597,8 @@ export function ActiveFilters({
   if (chips.length === 0) return null
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-xs text-muted-foreground">已选</span>
+    <div className="flex flex-wrap items-center gap-1.5 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:pb-0.5 scrollbar-none">
+      <span className="shrink-0 text-xs text-muted-foreground">已选</span>
       {chips.map(c => (
         <RemovableChip
           key={c.key}

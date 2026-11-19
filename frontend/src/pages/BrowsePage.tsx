@@ -298,6 +298,7 @@ export default function BrowsePage() {
       <PageHead
         title="作品索引"
         description="按标签、评分、排名与年代筛选，条件写入 URL。"
+        compact
       />
 
       <div className="flex gap-6">
@@ -339,7 +340,7 @@ export default function BrowsePage() {
         )}
 
         <section className="min-w-0 flex-1">
-          <div className="sticky top-16 z-20 -mx-4 border-b bg-background/95 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
+          <div className="sticky top-0 z-20 -mx-4 border-b bg-background/95 px-4 py-1.5 backdrop-blur sm:-mx-6 sm:px-6 md:top-16 md:py-2 lg:mx-0 lg:px-0">
             <div className="flex flex-wrap items-center gap-2 max-sm:grid max-sm:grid-cols-[auto_1fr]">
               {collapsed && (
                 <Button
@@ -375,7 +376,7 @@ export default function BrowsePage() {
                 onCommit={v => patch({ keyword: v || undefined })}
               />
 
-              <div className="flex items-center gap-1.5 max-sm:col-span-2 max-sm:w-full">
+              <div className="flex flex-1 items-center gap-1.5 max-sm:col-span-2 max-sm:w-full">
                 <Select
                   value={sort}
                   onValueChange={v => patch({ sort: v === 'rank' ? undefined : v, order: undefined })}
@@ -408,37 +409,36 @@ export default function BrowsePage() {
                   )}
                 </Button>
 
-
-              </div>
-
-              <div className="ml-auto flex items-center gap-2 max-sm:col-span-2 max-sm:ml-0 max-sm:w-full max-sm:justify-end">
-              <p className="hidden text-sm text-muted-foreground sm:block" aria-live="polite">
-                {loading && !data ? '检索中…' : data ? `共 ${data.total.toLocaleString()} 条结果` : ''}
-              </p>
-                <ToggleGroup
-                  type="single"
-                  value={view}
-                  onValueChange={v => {
-                    if (v) patch({ view: v === 'grid' ? undefined : (v as ViewMode) }, false)
-                  }}
-                  aria-label="视图切换"
-                  className="gap-0.5"
-                >
-                  {VIEWS.map(v => {
-                    const Icon = v.icon
-                    return (
-                      <ToggleGroupItem
-                        key={v.value}
-                        value={v.value}
-                        aria-label={`视图：${v.label}`}
-                        title={`视图：${v.label}`}
-                        className={cn(ctl.square, ctl.on)}
-                      >
-                        <Icon size={14} aria-hidden />
-                      </ToggleGroupItem>
-                    )
-                  })}
-                </ToggleGroup>
+                {/* 窄屏排序/方向/视图合并为一行，工具栏从三行压到两行 */}
+                <div className="ml-auto flex items-center gap-2">
+                  <p className="hidden text-sm text-muted-foreground sm:block" aria-live="polite">
+                    {loading && !data ? '检索中…' : data ? `共 ${data.total.toLocaleString()} 条结果` : ''}
+                  </p>
+                  <ToggleGroup
+                    type="single"
+                    value={view}
+                    onValueChange={v => {
+                      if (v) patch({ view: v === 'grid' ? undefined : (v as ViewMode) }, false)
+                    }}
+                    aria-label="视图切换"
+                    className="gap-0.5"
+                  >
+                    {VIEWS.map(v => {
+                      const Icon = v.icon
+                      return (
+                        <ToggleGroupItem
+                          key={v.value}
+                          value={v.value}
+                          aria-label={`视图：${v.label}`}
+                          title={`视图：${v.label}`}
+                          className={cn(ctl.square, ctl.on)}
+                        >
+                          <Icon size={14} aria-hidden />
+                        </ToggleGroupItem>
+                      )
+                    })}
+                  </ToggleGroup>
+                </div>
               </div>
             </div>
 
@@ -449,7 +449,7 @@ export default function BrowsePage() {
             )}
           </div>
 
-          <div className="mb-3 mt-3 flex items-center justify-between gap-2">
+          <div className="mb-2 mt-1.5 flex items-center justify-between gap-2">
             <span className="num text-xs text-muted-foreground" aria-live="polite">
               {loading && !data ? (
                 '检索中…'
