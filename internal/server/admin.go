@@ -252,6 +252,10 @@ func (s *Server) handleAdminSubjects(w http.ResponseWriter, r *http.Request) {
 		Page:        parseIntParam(r, "page", 1),
 		PageSize:    parseIntParam(r, "page_size", 20),
 	}
+	if !validText(q.Keyword) || !validTexts(q.Tags) || !validTexts(q.ExcludeTags) || !validTexts(q.MetaTags) {
+		badRequest(w, "请求参数含非法字符")
+		return
+	}
 	res, err := s.store.Search(r.Context(), q)
 	if err != nil {
 		internalError(w, err)

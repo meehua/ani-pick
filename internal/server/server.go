@@ -240,6 +240,16 @@ func (s *Server) invalidateCacheConfig() {
 	s.cfgMu.Unlock()
 }
 
+// hasDotDot 判断路径是否含 .. 段（穿越语义）。
+func hasDotDot(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) spa() http.Handler {
 	fileServer := http.FileServer(http.FS(s.static))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +259,12 @@ func (s *Server) spa() http.Handler {
 		}
 		// 未匹配的 API 路径直接 404，绝不回退到 SPA。
 		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+		// 解码后路径含 .. 段的一律 404，不落 SPA 兜底：编码穿越（%2e%2e/%2f 等
+		// 变体）会绕过 mux 的路径规整落进本 handler，r.URL.Path 已百分号解码。
+		if hasDotDot(r.URL.Path) {
 			http.NotFound(w, r)
 			return
 		}

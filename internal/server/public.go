@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"anipick/internal/db"
 	"anipick/internal/store"
@@ -63,6 +64,31 @@ func parseIntCSV(r *http.Request, key string) []int {
 		}
 	}
 	return out
+}
+
+// validText 校验用户可控文本：必须是合法 UTF-8 且不含 NUL——Postgres 会拒绝
+// 这两类输入，放行会让查询直接变 500。校验必须在触碰缓存与数据库之前完成。
+func validText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, '\x00')
+}
+
+func validTexts(ss []string) bool {
+	for _, s := range ss {
+		if !validText(s) {
+			return false
+		}
+	}
+	return true
+}
+
+// validDate 校验日期参数（YYYY-MM-DD）。宽松写法（如 zzz、2020-02-30）会打到
+// SQL 的 ::date 转换报错变 500，必须在 handler 侧拦成 400。
+func validDate(s string) bool {
+	if s == "" {
+		return true
+	}
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +156,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Order:       r.URL.Query().Get("order"),
 		Page:        parseIntParam(r, "page", 1),
 		PageSize:    parseIntParam(r, "page_size", 24),
+	}
+	// 入参校验前置：非法输入直接 400，不进缓存也不打库
+	if !validText(q.Keyword) || !validTexts(q.Tags) || !validTexts(q.ExcludeTags) || !validTexts(q.MetaTags) {
+		badRequest(w, "请求参数含非法字符")
+		return
+	}
+	if !validDate(q.DateFrom) || !validDate(q.DateTo) {
+		badRequest(w, "日期格式应为 YYYY-MM-DD")
+		return
 	}
 	if q.Page > 5000 {
 		q.Page = 5000
@@ -236,6 +271,10 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	types := parseIntCSV(r, "types")
 	limit := parseIntParam(r, "limit", 30)
+	if !validText(q) {
+		badRequest(w, "请求参数含非法字符")
+		return
+	}
 	queryTTL, publicTTL := s.cacheTTLs(r.Context())
 	key := tagCacheKey(q, types, limit)
 

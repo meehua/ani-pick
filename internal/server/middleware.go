@@ -131,19 +131,42 @@ func (s *Server) trustedProxy(remote string) bool {
 	return false
 }
 
+// limiterEntriesMax 是限流表的条目上限（1GB 机器内存红线：进程内缓存必须带上限）。
+// 新 IP 插入前腾位：先清 10 分钟未活跃的条目，仍满则强制淘汰最久未活跃的——
+// 独特 IP 洪泛（经可信反代头的伪造值或真实 IPv6 潮汐）能把条目数推满，
+// 必须有硬界兜底。O(n) 扫描只在表满时触发；被淘汰的 IP 会拿到满桶，
+// 属限流精度换内存安全的取舍。
+const limiterEntriesMax = 4096
+
 func (l *limiter) allow(key string, rate, burst float64) bool {
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.entries) > 4096 {
-		for k, b := range l.entries {
-			if now.Sub(b.last) > 10*time.Minute {
-				delete(l.entries, k)
-			}
-		}
-	}
 	b, ok := l.entries[key]
 	if !ok {
+		if len(l.entries) >= limiterEntriesMax {
+			for k, e := range l.entries {
+				if now.Sub(e.last) > 10*time.Minute {
+					delete(l.entries, k)
+				}
+			}
+			for len(l.entries) >= limiterEntriesMax {
+				oldestKey := ""
+				oldest := now
+				for k, e := range l.entries {
+					if k == key {
+						continue // 不挤掉刚要建立的桶
+					}
+					if e.last.Before(oldest) {
+						oldestKey, oldest = k, e.last
+					}
+				}
+				if oldestKey == "" {
+					break
+				}
+				delete(l.entries, oldestKey)
+			}
+		}
 		b = &bucket{tokens: burst, last: now}
 		l.entries[key] = b
 	}

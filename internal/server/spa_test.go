@@ -49,6 +49,25 @@ func TestSPAFallback(t *testing.T) {
 	}
 }
 
+// TestSPATraversalRejected 编码穿越（%2e%2e/%2f 变体）会绕过 mux 的路径规整
+// 落进 spa handler，此前会兜底回 200 index.html；应一律 404。
+func TestSPATraversalRejected(t *testing.T) {
+	h := testServer().spa()
+	for _, target := range []string{
+		"/..%2f..%2fetc%2fpasswd",
+		"/%2e%2e/%2e%2e/etc/passwd",
+		"/assets/..%2f..%2fmain.go",
+		"/a/../../etc/passwd",
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s 应 404，实际 %d", target, rec.Code)
+		}
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	s := testServer()
 	h := s.securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
