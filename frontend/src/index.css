@@ -264,3 +264,28 @@
     animation: none;
   }
 }
+
+/* DarkStage 舞台材质（首页 hero / 条目 hero / 条目骨架共用）。
+   浅色模式 = 浅底深字玻璃舞台（白纱渐变盖模糊封面，不再是突兀的黑块）；
+   深色模式 = 原 zinc-950 黑底白字。组件内的文字/描边/玻璃统一引用这些变量，
+   图表 SVG 的分段基色用 --stage-seg-rgb（JS 里拼 rgb(var(--stage-seg-rgb) / a)）。 */
+.dark-stage {
+  --stage-fg: oklch(0.205 0 0);
+  --stage-line: oklch(0.205 0 0 / 14%);
+  --stage-glass: oklch(1 0 0 / 55%);
+  --stage-lens: oklch(1 0 0 / 45%);
+  --stage-seg-rgb: 24 24 27;
+  background-color: oklch(0.955 0 0);
+  color: var(--stage-fg);
+  box-shadow: 0 0 0 1px oklch(0.205 0 0 / 8%);
+}
+
+.dark .dark-stage {
+  --stage-fg: oklch(0.985 0 0);
+  --stage-line: oklch(1 0 0 / 15%);
+  --stage-glass: oklch(1 0 0 / 10%);
+  --stage-lens: oklch(1 0 0 / 5%);
+  --stage-seg-rgb: 255 255 255;
+  background-color: oklch(0.145 0 0);
+  box-shadow: none;
+}

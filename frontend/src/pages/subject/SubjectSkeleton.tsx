@@ -9,42 +9,42 @@ export function SubjectSkeleton() {
 
       <DarkStage className="p-5 sm:p-7">
         <div className="grid gap-x-6 gap-y-4 max-sm:grid-cols-[110px_minmax(0,1fr)] sm:grid-cols-[190px_minmax(0,1fr)] lg:grid-cols-[190px_minmax(0,1fr)_300px] lg:gap-x-8">
-          <Skeleton className="aspect-[5/7] w-[110px] rounded-lg bg-white/10 sm:w-full sm:rounded-xl" />
+          <Skeleton className="aspect-[5/7] w-[110px] rounded-lg bg-(--stage-glass) sm:w-full sm:rounded-xl" />
           <div className="min-w-0 space-y-3">
             <div className="flex gap-1.5">
               {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-5 w-14 bg-white/10" />
+                <Skeleton key={i} className="h-5 w-14 bg-(--stage-glass)" />
               ))}
             </div>
-            <Skeleton className="h-9 w-3/4 bg-white/10" />
-            <Skeleton className="h-4 w-1/2 bg-white/10" />
+            <Skeleton className="h-9 w-3/4 bg-(--stage-glass)" />
+            <Skeleton className="h-4 w-1/2 bg-(--stage-glass)" />
           </div>
           <div className="min-w-0 space-y-3 max-sm:col-span-2">
             <div className="flex items-end gap-8">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="space-y-1.5">
-                  <Skeleton className="h-3 w-12 bg-white/10" />
-                  <Skeleton className="h-8 w-16 bg-white/10" />
+                  <Skeleton className="h-3 w-12 bg-(--stage-glass)" />
+                  <Skeleton className="h-8 w-16 bg-(--stage-glass)" />
                 </div>
               ))}
             </div>
-            <Skeleton className="h-4 w-72 bg-white/10" />
+            <Skeleton className="h-4 w-72 bg-(--stage-glass)" />
             <div className="flex gap-2">
-              <Skeleton className="h-8 w-36 rounded-md bg-white/10" />
-              <Skeleton className="h-8 w-40 rounded-md bg-white/10" />
+              <Skeleton className="h-8 w-36 rounded-md bg-(--stage-glass)" />
+              <Skeleton className="h-8 w-40 rounded-md bg-(--stage-glass)" />
             </div>
-            <Skeleton className="h-20 w-full bg-white/10" />
+            <Skeleton className="h-20 w-full bg-(--stage-glass)" />
           </div>
         </div>
 
         {/* 图形占位：与正式 hero 同构（无面板底——玻璃圆盘 + 裸排柱条） */}
         <div className="grid col-span-full grid-cols-1 gap-3 sm:grid-cols-2 lg:col-span-1 lg:col-start-3 lg:row-span-2 lg:row-start-1 lg:grid-cols-1">
-          <Skeleton className="mx-auto size-[132px] rounded-full bg-white/[0.06] ring-1 ring-white/10" />
+          <Skeleton className="mx-auto size-[132px] rounded-full bg-(--stage-lens) ring-1 ring-(--stage-line)" />
           <div className="flex items-end gap-1.5 px-5">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="w-12 shrink-0 space-y-1">
-                <Skeleton className="w-full rounded-t bg-white/10" style={{ height: 20 + ((i * 17) % 44) }} />
-                <Skeleton className="h-3 w-full bg-white/10" />
+                <Skeleton className="w-full rounded-t bg-(--stage-glass)" style={{ height: 20 + ((i * 17) % 44) }} />
+                <Skeleton className="h-3 w-full bg-(--stage-glass)" />
               </div>
             ))}
           </div>

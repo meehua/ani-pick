@@ -4,12 +4,13 @@ import { fmtNum } from '../../lib/format'
 import type { TagVote } from '../../api/types'
 
 // hero 右侧两张图：评分分布扇形（donut）+ 标签柱状（横向滚动）。
-// 玻璃质感由图形自己承担：扇形自带圆形镜片（backdrop-blur + 极淡白描边），
+// 玻璃质感由图形自己承担：扇形自带圆形镜片（backdrop-blur + 极淡描边），
 // 柱条本身半透明毛玻璃——不再套任何面板底。
-// 均为深底白字体系，amber 为唯一强调色。
+// 颜色走 .dark-stage 变量族（浅色浅底深字 / 深色黑底白字），amber 为唯一强调色。
 // 滚轮约定：鼠标进图即为图服务——柱状图滚轮横滚（不释放给页面），donut 滚轮在有票档间循环步进。
 
-// 低分段（1–5）几乎隐没的白，高分段（6–10）琥珀点亮：图形直接传达「高分占比」。
+// 低分段（1–5）几乎隐没的中性色，高分段（6–10）琥珀点亮：图形直接传达「高分占比」。
+// 基色由 --stage-seg-rgb 随主题切换（浅色 zinc-900 / 深色白），透明度不变。
 function segAlpha(star: number): number {
   return star >= 6 ? 0.3 + 0.7 * ((star - 6) / 4) : 0.1 + 0.1 * ((star - 1) / 4)
 }
@@ -19,7 +20,7 @@ function segColor(star: number, selected: number | null, topStar: number | null)
   if (selected === star) alpha = Math.min(1, alpha + 0.3)
   else if (selected !== null) alpha *= 0.4
   else if (star === topStar) alpha = Math.min(1, alpha + 0.15)
-  const rgb = star >= 6 ? '245 158 11' : '255 255 255'
+  const rgb = star >= 6 ? '245 158 11' : 'var(--stage-seg-rgb)'
   return `rgb(${rgb} / ${alpha.toFixed(2)})`
 }
 
@@ -99,7 +100,7 @@ export function RatingDonut({ counts }: { counts: number[] }) {
     <div ref={panelRef} className="relative mx-auto" style={{ width: SIZE, height: SIZE }}>
       {/* 玻璃镜片：图形自身的毛玻璃，跟随圆盘轮廓，无面板底 */}
       <div
-        className="absolute inset-0 rounded-full bg-white/[0.05] ring-1 ring-white/15 backdrop-blur-md"
+        className="absolute inset-0 rounded-full bg-(--stage-lens) ring-1 ring-(--stage-line) backdrop-blur-md"
         aria-hidden
       />
       <svg
@@ -109,20 +110,20 @@ export function RatingDonut({ counts }: { counts: number[] }) {
         role="img"
         aria-label="评分分布扇形图，hover 或滚轮查看各档"
       >
-        <circle cx={C} cy={C} r={R} fill="none" stroke="rgb(255 255 255 / 0.08)" strokeWidth={STROKE} />
+        <circle cx={C} cy={C} r={R} fill="none" stroke="rgb(var(--stage-seg-rgb) / 0.08)" strokeWidth={STROKE} />
         {arcs}
       </svg>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
         {shownSeg ? (
           <>
-            <p className="num text-2xl font-semibold leading-none text-amber-400">
+            <p className="num text-2xl font-semibold leading-none text-amber-600 dark:text-amber-400">
               {shownSeg.star}
-              <span className="ml-0.5 text-sm font-normal text-white/50">分</span>
+              <span className="ml-0.5 text-sm font-normal text-(--stage-fg)/50">分</span>
             </p>
-            <p className="num mt-1 text-xs text-white/60">{fmtNum(shownSeg.n)} 票</p>
+            <p className="num mt-1 text-xs text-(--stage-fg)/60">{fmtNum(shownSeg.n)} 票</p>
           </>
         ) : (
-          <p className="text-xs text-white/50">暂无评分</p>
+          <p className="text-xs text-(--stage-fg)/50">暂无评分</p>
         )}
       </div>
     </div>
@@ -186,7 +187,7 @@ export function TagBars({ tags }: { tags: TagVote[] }) {
   const mask = `linear-gradient(to right, ${stops.join(', ')})`
 
   if (sorted.length === 0) {
-    return <p className="py-6 text-center text-xs text-white/50">暂无标签数据</p>
+    return <p className="py-6 text-center text-xs text-(--stage-fg)/50">暂无标签数据</p>
   }
 
   return (
@@ -203,14 +204,14 @@ export function TagBars({ tags }: { tags: TagVote[] }) {
             className="group flex w-12 shrink-0 flex-col items-center justify-end gap-1"
             title={`${t.name} · ${t.votes} 票 · ${t.pct.toFixed(1)}%`}
           >
-            <span className="num text-xs leading-none text-white/60 group-hover:text-white">
+            <span className="num text-xs leading-none text-(--stage-fg)/60 group-hover:text-(--stage-fg)">
               {fmtNum(t.votes)}
             </span>
             <div
-              className="w-7 rounded-t-sm bg-amber-400/55 backdrop-blur-[3px] transition-colors group-hover:bg-amber-400/90"
+              className="w-7 rounded-t-sm bg-amber-500/45 backdrop-blur-[3px] transition-colors group-hover:bg-amber-500/80 dark:bg-amber-400/55 dark:group-hover:bg-amber-400/90"
               style={{ height: `${Math.max(6, Math.round((t.votes / max) * 62))}px` }}
             />
-            <span className="w-full truncate text-center text-xs leading-tight text-white/55 group-hover:text-white">
+            <span className="w-full truncate text-center text-xs leading-tight text-(--stage-fg)/55 group-hover:text-(--stage-fg)">
               {t.name}
             </span>
           </Link>

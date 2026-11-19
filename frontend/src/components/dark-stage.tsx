@@ -1,8 +1,9 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
-// 深色舞台：zinc-950 圆角容器 + 可选的模糊封面背景 + 渐变遮罩。
-// 首页 hero、条目 hero 与条目骨架共用同一族视觉语言。
+// 舞台容器：圆角底座 + 可选的模糊封面背景 + 渐变遮罩。
+// 首页 hero、条目 hero 与条目骨架共用同一族视觉语言；材质（浅色浅底深字 /
+// 深色黑底白字）由 index.css 的 .dark-stage 变量族决定，子元素引用 stage-* 变量。
 export function DarkStage({
   backdropSrc,
   className,
@@ -17,7 +18,7 @@ export function DarkStage({
   children: React.ReactNode
 }) {
   return (
-    <section className={cn('relative overflow-hidden rounded-2xl bg-zinc-950 text-zinc-50', className)}>
+    <section className={cn('dark-stage relative overflow-hidden rounded-2xl', className)}>
       {backdropSrc && (
         <img
           src={backdropSrc}

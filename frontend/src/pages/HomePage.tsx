@@ -170,12 +170,12 @@ export default function HomePage() {
     <div className="space-y-10">
       <DarkStage
         backdropSrc={backdrop}
-        imgClassName="opacity-25"
-        overlayClassName="bg-gradient-to-t from-black/80 via-black/50 to-black/30"
+        imgClassName="opacity-40"
+        overlayClassName="bg-gradient-to-t from-white/85 via-white/50 to-white/25 dark:from-black/70 dark:via-black/40 dark:to-black/20"
       >
         <div className="relative grid gap-6 p-6 sm:p-8 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-end lg:p-10">
           <div>
-            <p className="text-[11px] font-medium tracking-[0.22em] text-white/60">
+            <p className="text-[11px] font-medium tracking-[0.22em] text-(--stage-fg)/60">
               BANGUMI INDEX
             </p>
             <h1 className="mt-3 text-[clamp(2rem,4.4vw,3.2rem)] font-semibold leading-[1.1] tracking-tight">
@@ -189,21 +189,21 @@ export default function HomePage() {
               <br className="hidden sm:block" />
               找到下一部。
             </h1>
-            <p className="mt-3 max-w-xl text-sm leading-relaxed text-white/65">
+            <p className="mt-3 max-w-xl text-sm leading-relaxed text-(--stage-fg)/65">
               筛选条件写入地址栏，可收藏、可分享；返回索引时保留原来的筛选和滚动位置。
             </p>
 
             <SearchBox size="lg" onDark className="mt-5 max-w-xl" />
 
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
-              <span className="mr-0.5 text-xs text-white/55">试试</span>
+              <span className="mr-0.5 text-xs text-(--stage-fg)/55">试试</span>
               {QUICK.map(q => (
                 <Button
                   key={q.label}
                   asChild
                   size="xs"
                   variant="outline"
-                  className="border-white/15 bg-white/10 text-white hover:bg-white/20"
+                  className="border-(--stage-line) bg-(--stage-glass) text-(--stage-fg) hover:bg-white/80 dark:hover:bg-white/20"
                 >
                   <Link to={q.to}>{q.label}</Link>
                 </Button>
@@ -211,7 +211,7 @@ export default function HomePage() {
             </div>
 
             {meta && (
-              <p className="num mt-5 text-xs text-white/45">
+              <p className="num mt-5 text-xs text-(--stage-fg)/45">
                 {fmtCount(meta.stats.tags)}个标签 · {TYPE_ORDER.length} 种类型 · 最近更新{' '}
                 {fmtDate(meta.stats.last_fetched)}
               </p>
@@ -220,13 +220,13 @@ export default function HomePage() {
 
           <div className="hidden lg:block">
             <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs text-white/55">从这里开始</p>
+              <p className="text-xs text-(--stage-fg)/55">从这里开始</p>
               <Button
                 type="button"
                 variant="ghost"
                 size="xs"
                 onClick={() => setSeed(s => s + 1)}
-                className="text-white/70 hover:bg-white/10 hover:text-white"
+                className="text-(--stage-fg)/70 hover:bg-zinc-950/5 hover:text-(--stage-fg) dark:hover:bg-white/10 dark:hover:text-white"
               >
                 换一批
               </Button>
@@ -234,7 +234,7 @@ export default function HomePage() {
             <div className="grid grid-cols-3 gap-2">
               {wall.length === 0
                 ? Array.from({ length: 6 }).map((_, i) => (
-                    <Skeleton key={i} className="aspect-[5/7] rounded-md bg-white/10" />
+                    <Skeleton key={i} className="aspect-[5/7] rounded-md bg-(--stage-glass)" />
                   ))
                 : wall.map(s => (
                     <Link key={s.id} to={`/subject/${s.id}`} className="group" title={s.name_cn || s.name}>
@@ -242,7 +242,7 @@ export default function HomePage() {
                         src={s.image}
                         alt={s.name_cn || s.name}
                         priority
-                        className="aspect-[5/7] rounded-md border border-white/15"
+                        className="aspect-[5/7] rounded-md border border-(--stage-line)"
                       />
                     </Link>
                   ))}

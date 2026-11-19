@@ -52,7 +52,7 @@ export function SearchBox({
         <Button
           type="submit"
           size="lg"
-          className={cn('h-11 shrink-0 px-5', onDark && 'bg-white text-black hover:bg-white/90')}
+          className={cn('h-11 shrink-0 px-5', onDark && 'dark:bg-white dark:text-black dark:hover:bg-white/90')}
         >
           搜索
         </Button>
