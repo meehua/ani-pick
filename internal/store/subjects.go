@@ -783,41 +783,40 @@ type Stats struct {
 func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	out := Stats{ByType: map[string]int{}, BySource: map[string]int{}}
 
-	// 六条独立统计查询并行执行：省 IO 等待（总 CPU 不变，都是同一批小聚合）
+	// 五条独立统计查询并行执行：省 IO 等待（总 CPU 不变，都是同一批小聚合）
 	var wg sync.WaitGroup
-	errs := make([]error, 5)
-	wg.Add(6) // 来源计数不计入 errs，失败静默
+	errs := make([]error, 4)
+	wg.Add(5) // 来源计数不计入 errs，失败静默
 	go func() {
 		defer wg.Done()
-		// 总数口径 = 作品数（塌缩到主行）；敏感数同口径只算主行
-		errs[0] = s.Pool.QueryRow(ctx, `
-			SELECT count(*), count(*) FILTER (WHERE nsfw) FROM subjects
-			WHERE work_id = 0 OR id = work_id`).Scan(&out.Total, &out.NSFW)
-	}()
-	go func() {
-		defer wg.Done()
-		// 类型计数口径 = 作品数（塌缩到主行；扩展源行与主行同属一个作品，不重复计）
+		// 总数/敏感数/类型计数一次拿齐，口径 = 作品数（塌缩到主行；扩展源行
+		// 与主行同属一个作品，不重复计）。塌缩条件已放进部分索引谓词
+		//（0008 subjects_work_type_idx），引用列全部在索引内——
+		// 仅索引扫描出结果；旧写法两处 OR 查询各整表扫一遍（生产 169k 行）。
 		rows, err := s.Pool.Query(ctx, `
-			SELECT type, count(*) FROM subjects
+			SELECT type, count(*), count(*) FILTER (WHERE nsfw) FROM subjects
 			WHERE work_id = 0 OR id = work_id GROUP BY type`)
 		if err != nil {
-			errs[1] = err
+			errs[0] = err
 			return
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var t, n int
-			if err := rows.Scan(&t, &n); err != nil {
-				errs[1] = err
+			var t, n, nsfwN int
+			if err := rows.Scan(&t, &n, &nsfwN); err != nil {
+				errs[0] = err
 				return
 			}
 			out.ByType[strconv.Itoa(t)] = n
+			out.Total += n
+			out.NSFW += nsfwN
 		}
-		errs[1] = rows.Err()
+		errs[0] = rows.Err()
 	}()
 	go func() {
 		defer wg.Done()
-		// 来源计数口径 = 覆盖作品数（DISTINCT work_id；0 值行按自身 id 计）
+		// 来源计数口径 = 覆盖作品数（DISTINCT work_id；0 值行按自身 id 计）。
+		// 引用列随附在 0008 subjects_source_work_idx 内，仅索引扫描。
 		rows, err := s.Pool.Query(ctx, `
 			SELECT source, count(DISTINCT CASE WHEN work_id = 0 THEN id ELSE work_id END)
 			FROM subjects GROUP BY source`)
@@ -838,18 +837,18 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		defer wg.Done()
 		// 展示用计数改取统计信息估算（reltuples 随抓取后的 ANALYZE 刷新）：
 		// 精确 count 对 subject_tags 要扫 45 万行（实测 41-96ms），每轮缓存过期都来一次不划算
-		errs[2] = s.Pool.QueryRow(ctx, `
+		errs[1] = s.Pool.QueryRow(ctx, `
 			SELECT GREATEST(reltuples::bigint, 0) FROM pg_class WHERE relname = 'tags'`).Scan(&out.Tags)
 	}()
 	go func() {
 		defer wg.Done()
-		errs[3] = s.Pool.QueryRow(ctx, `
+		errs[2] = s.Pool.QueryRow(ctx, `
 			SELECT GREATEST(reltuples::bigint, 0) FROM pg_class WHERE relname = 'subject_tags'`).Scan(&out.SubjectTags)
 	}()
 	go func() {
 		defer wg.Done()
 		var last *time.Time
-		errs[4] = s.Pool.QueryRow(ctx, `SELECT max(fetched_at) FROM subjects`).Scan(&last)
+		errs[3] = s.Pool.QueryRow(ctx, `SELECT max(fetched_at) FROM subjects`).Scan(&last)
 		out.LastFetched = last
 	}()
 	wg.Wait()

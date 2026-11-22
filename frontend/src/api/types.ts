@@ -237,6 +237,8 @@ export interface CacheSettings {
   meta_ttl: number
   meta_tags_ttl: number
   overview_ttl: number
+  /** 扩展源详情代理缓存 TTL（秒）；回源要等上游响应，默认 600 */
+  ext_detail_ttl: number
   max_keys: number
   /** 元标签候选缓存的键上限；0 = 默认 64 */
   meta_tags_max_keys: number

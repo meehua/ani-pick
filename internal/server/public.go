@@ -346,9 +346,11 @@ func (s *Server) handleSubjectExtDetail(w http.ResponseWriter, r *http.Request) 
 	}
 	snap := s.snapshot(r.Context())
 	key := "ext:" + strconv.FormatInt(id, 10)
-	if snap.queryTTL > 0 { // 0 = 关闭详情缓存：每次都回源
+	// 扩展源详情独立 TTL（默认 600s）：回源要等上游响应（秒级），评分/标题
+	// 变化慢，不该按搜索查询的 60s 节奏重付上游延迟；管理端刷新/删除按 id 失效
+	if snap.extDetailTTL > 0 { // 0 = 关闭详情缓存：每次都回源
 		s.detailMu.Lock()
-		if e, ok := s.detailCache[key]; ok && time.Since(e.at) < snap.queryTTL {
+		if e, ok := s.detailCache[key]; ok && time.Since(e.at) < snap.extDetailTTL {
 			body := e.body
 			s.detailMu.Unlock()
 			s.m.cacheEvent("ext-detail", "hit")
@@ -415,7 +417,7 @@ func (s *Server) handleSubjectExtDetail(w http.ResponseWriter, r *http.Request) 
 			"上游详情获取失败", "稍后重试；详情结果已缓存，命中后不再回源")
 		return
 	}
-	if snap.queryTTL > 0 {
+	if snap.extDetailTTL > 0 {
 		s.detailMu.Lock()
 		if len(s.detailCache) >= snap.maxKeys {
 			s.detailCache = map[string]cachedJSON{} // id 空间无界，超限整体换新
@@ -681,22 +683,61 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	snap := s.snapshot(r.Context())
 	if snap.metaTTL > 0 { // 0 = 关闭 meta 缓存：每次都实算
 		s.metaMu.Lock()
-		body, fresh := s.metaBody, time.Since(s.metaBody.at) < snap.metaTTL
+		body := s.metaBody
+		fresh := body.body != nil && time.Since(body.at) < snap.metaTTL
+		stale := body.body != nil && !fresh && !s.metaRefreshing
+		if stale {
+			s.metaRefreshing = true // 同一时刻至多一次后台重算
+		}
 		s.metaMu.Unlock()
-		if fresh && body.body != nil {
+		if fresh {
 			s.m.cacheEvent("meta", "hit")
+			writeJSONTTL(w, http.StatusOK, body.body, snap.publicTTL)
+			return
+		}
+		if stale {
+			// 过期先回旧数据、后台单飞重算：进站请求永远不等统计聚合，
+			// 冷机上的 origin 不再放大首屏延迟
+			s.m.cacheEvent("meta", "stale")
+			go s.refreshMeta(snap, db.TraceFrom(r.Context()))
 			writeJSONTTL(w, http.StatusOK, body.body, snap.publicTTL)
 			return
 		}
 	}
 	s.m.cacheEvent("meta", "origin")
-
-	stats, err := s.store.Stats(r.Context())
+	payload, err := s.buildMeta(r.Context(), snap)
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	payload, err := json.Marshal(map[string]any{
+	if snap.metaTTL > 0 {
+		s.metaMu.Lock()
+		s.metaBody = cachedJSON{at: time.Now(), body: payload}
+		s.metaMu.Unlock()
+	}
+	writeJSONTTL(w, http.StatusOK, payload, snap.publicTTL)
+}
+
+// refreshMeta 后台重算 /api/meta：完成后替换缓存体并解除单飞标记。
+func (s *Server) refreshMeta(snap cfgSnapshot, tr *db.RequestTrace) {
+	ctx, cancel := context.WithTimeout(db.ContextWithTrace(context.Background(), tr), 30*time.Second)
+	defer cancel()
+	payload, err := s.buildMeta(ctx, snap)
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	if err == nil {
+		s.metaBody = cachedJSON{at: time.Now(), body: payload}
+	}
+	s.metaRefreshing = false
+}
+
+// buildMeta 组装公开元信息响应体：统计聚合 + 登记表清单 + 词表。
+func (s *Server) buildMeta(ctx context.Context, snap cfgSnapshot) ([]byte, error) {
+	stats, err := s.store.Stats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
 		"name":    "AniPick",
 		"version": s.version,
 		"commit":  s.commit,
@@ -710,14 +751,4 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		// 首页快捷入口（登记表 QuickLinks 下发，{year} 占位符由前端替换）
 		"quick_links": registry.QuickLinks,
 	})
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if snap.metaTTL > 0 {
-		s.metaMu.Lock()
-		s.metaBody = cachedJSON{at: time.Now(), body: payload}
-		s.metaMu.Unlock()
-	}
-	writeJSONTTL(w, http.StatusOK, payload, snap.publicTTL)
 }

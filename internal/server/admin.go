@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"anipick/internal/crawler"
+	"anipick/internal/db"
 	"anipick/internal/netx"
 	"anipick/internal/registry"
 	"anipick/internal/sources"
@@ -29,23 +30,63 @@ func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
 // overviewRunsLimit 是概览面板「最近任务」的显示条数：一次合并运行按源各占
 // 一行，条数要覆盖到每个启用源最近一轮（推算下次自动计划也读它）；任务历史的
 // 完整浏览走「数据 → 抓取设置」页的任务表，带筛选/排序/分页。
-// handleAdminOverview 聚合 6+ 条统计 SQL；前端每 4s 轮询，
-// 加 3s TTL 缓存把空闲时的持续轮询开销压到接近零，抓取等动作后主动失效。
+// handleAdminOverview 聚合 6+ 条统计 SQL；前端每 4s 轮询。
+// 缓存过期时先回旧数据、后台单飞重算（stale-while-revalidate）：轮询永远
+// 不等库，弱机上持续轮询的聚合开销被压到后台每 TTL 至多一次；抓取/设置等
+// 动作后的主动失效（invalidateOverview）清空缓存，下一次请求同步实算。
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	snap := s.snapshot(r.Context())
 	if snap.overviewTTL > 0 { // 0 = 关闭 overview 缓存：每次都实算
 		s.overviewMu.Lock()
-		body, fresh := s.overview, time.Since(s.overview.at) < snap.overviewTTL
+		body := s.overview
+		fresh := body.body != nil && time.Since(body.at) < snap.overviewTTL
+		stale := body.body != nil && !fresh && !s.overviewRefreshing
+		if stale {
+			s.overviewRefreshing = true // 同一时刻至多一次后台重算
+		}
 		s.overviewMu.Unlock()
-		if fresh && body.body != nil {
+		if fresh {
 			s.m.cacheEvent("overview", "hit")
+			writeJSONBytes(w, http.StatusOK, body.body)
+			return
+		}
+		if stale {
+			s.m.cacheEvent("overview", "stale")
+			// 后台重算沿用触发请求的 DB 计时归因（与搜索单飞同一手法）
+			go s.refreshOverview(snap, db.TraceFrom(r.Context()))
 			writeJSONBytes(w, http.StatusOK, body.body)
 			return
 		}
 	}
 	s.m.cacheEvent("overview", "origin")
+	payload, err := s.buildOverview(r.Context(), snap)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	s.overviewMu.Lock()
+	s.overview = cachedJSON{at: time.Now(), body: payload}
+	s.overviewMu.Unlock()
+	writeJSONBytes(w, http.StatusOK, payload)
+}
 
-	// 三路查询相互独立，并行执行缩短缓存未命中时的聚合耗时（省 IO 等待，不增总 CPU）
+// refreshOverview 后台重算管理总览：请求早已返回，查询用脱离请求的 ctx；
+// 完成后替换缓存体并解除单飞标记（失败只丢本次，下次过期再算）。
+func (s *Server) refreshOverview(snap cfgSnapshot, tr *db.RequestTrace) {
+	ctx, cancel := context.WithTimeout(db.ContextWithTrace(context.Background(), tr), 30*time.Second)
+	defer cancel()
+	payload, err := s.buildOverview(ctx, snap)
+	s.overviewMu.Lock()
+	defer s.overviewMu.Unlock()
+	if err == nil {
+		s.overview = cachedJSON{at: time.Now(), body: payload}
+	}
+	s.overviewRefreshing = false
+}
+
+// buildOverview 聚合管理总览响应体：三路独立查询并行执行缩短耗时
+// （省 IO 等待，不增总 CPU），再补过期数与各源新鲜度。
+func (s *Server) buildOverview(ctx context.Context, snap cfgSnapshot) ([]byte, error) {
 	var (
 		stats                          store.Stats
 		settings                       store.AppSettings
@@ -54,25 +95,22 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	)
 	var wg sync.WaitGroup
 	wg.Add(3)
-	go func() { defer wg.Done(); stats, errStats = s.store.Stats(r.Context()) }()
-	go func() { defer wg.Done(); settings, errSettings = s.store.LoadSettings(r.Context(), s.defaults) }()
-	go func() { defer wg.Done(); runs, errRuns = s.store.RecentRuns(r.Context(), s.cfg.overviewRuns) }()
+	go func() { defer wg.Done(); stats, errStats = s.store.Stats(ctx) }()
+	go func() { defer wg.Done(); settings, errSettings = s.store.LoadSettings(ctx, s.defaults) }()
+	go func() { defer wg.Done(); runs, errRuns = s.store.RecentRuns(ctx, snap.overviewRuns) }()
 	wg.Wait()
 	if errStats != nil {
-		internalError(w, errStats)
-		return
+		return nil, errStats
 	}
 	if errSettings != nil {
-		internalError(w, errSettings)
-		return
+		return nil, errSettings
 	}
 	if errRuns != nil {
-		internalError(w, errRuns)
-		return
+		return nil, errRuns
 	}
 	// 待重爬口径 = 原生索引超过其有效保留期（源覆盖 ?? 全局默认）的条目数
 	nativeTTL := store.EffectiveRefreshTTL(registry.NativeID(), settings.Sources, settings.Crawl.RefreshTTLDays)
-	stale, _ := s.store.CountStale(r.Context(), nativeTTL, settings.Crawl.StaleRetryCap, settings.Crawl.Types)
+	stale, _ := s.store.CountStale(ctx, nativeTTL, settings.Crawl.StaleRetryCap, settings.Crawl.Types)
 
 	// 扩展源清单（管理面板「抓取」面板按源展示配置状态与手动触发按钮）：
 	// 按登记表/设置的有效优先级排序，带启用状态与各自的新鲜度（过期条目数，
@@ -85,7 +123,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		staleSources = append(staleSources, h.Source())
 		staleTTLs = append(staleTTLs, store.EffectiveRefreshTTL(h.Source(), srcCfg, settings.Crawl.RefreshTTLDays))
 	}
-	staleBySource, _ := s.store.CountStaleBySource(r.Context(), staleSources, staleTTLs)
+	staleBySource, _ := s.store.CountStaleBySource(ctx, staleSources, staleTTLs)
 	harvesters := make([]map[string]any, 0, len(allHarvesters))
 	for _, h := range allHarvesters {
 		enabled := true
@@ -105,9 +143,9 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(harvesters, func(i, j int) bool {
 		return harvesters[i]["priority"].(int) < harvesters[j]["priority"].(int)
 	})
-	lastAll, _ := s.store.LastAllSourceRun(r.Context(), registry.NativeID())
+	lastAll, _ := s.store.LastAllSourceRun(ctx, registry.NativeID())
 
-	payload, err := json.Marshal(map[string]any{
+	return json.Marshal(map[string]any{
 		"stats":            stats,
 		"crawler":          s.crawler.Status(),
 		"runs":             runs,
@@ -122,14 +160,6 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 	})
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	s.overviewMu.Lock()
-	s.overview = cachedJSON{at: time.Now(), body: payload}
-	s.overviewMu.Unlock()
-	writeJSONBytes(w, http.StatusOK, payload)
 }
 
 type adminSettingsPayload struct {

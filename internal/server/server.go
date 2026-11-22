@@ -50,10 +50,12 @@ type Server struct {
 	cacheMu  sync.Mutex
 	metaTags map[string]cachedMetaTags
 
-	metaMu     sync.Mutex
-	metaBody   cachedJSON
-	overviewMu sync.Mutex
-	overview   cachedJSON
+	metaMu             sync.Mutex
+	metaBody           cachedJSON
+	metaRefreshing     bool // 过期后台重算进行中（单飞，防止并发重算压库）
+	overviewMu         sync.Mutex
+	overview           cachedJSON
+	overviewRefreshing bool // 同上：overview 过期后台重算进行中
 
 	pageMu    sync.Mutex
 	pageCache map[string]cachedJSON
@@ -239,6 +241,7 @@ type cfgSnapshot struct {
 	publicTTL     time.Duration // 公开 GET 响应 Cache-Control max-age
 	metaTTL       time.Duration // /api/meta
 	metaTagsTTL   time.Duration // /api/meta-tags
+	extDetailTTL  time.Duration // /api/subjects/{id}/detail 扩展源代理详情
 	overviewTTL   time.Duration // /api/admin/overview
 	maxKeys       int           // 搜索页/标签候选/详情/搜索总数缓存的键上限
 	rateRPS       float64       // 每 IP 常规请求速率（次/秒）
@@ -267,6 +270,7 @@ func (s *Server) applySnapshot(settings store.AppSettings) {
 		publicTTL:        time.Duration(store.CacheSec(c.PublicTTL, 30)) * time.Second,
 		metaTTL:          time.Duration(store.CacheSec(c.MetaTTL, 30)) * time.Second,
 		metaTagsTTL:      time.Duration(store.CacheSec(c.MetaTagsTTL, 600)) * time.Second,
+		extDetailTTL:     time.Duration(store.CacheSec(c.ExtDetailTTL, 600)) * time.Second,
 		overviewTTL:      time.Duration(store.CacheSec(c.OverviewTTL, 3)) * time.Second,
 		maxKeys:          c.MaxKeys,
 		rateRPS:          float64(sec.RateLimitRPS),

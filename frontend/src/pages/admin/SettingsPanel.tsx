@@ -90,7 +90,13 @@ export function SettingsPanel({
               label="后台总览缓存 (s)"
               value={cache.overview_ttl}
               onChange={v => setCacheField('overview_ttl', v)}
-              hint="0 = 关闭；默认 3；后台 4s 轮询"
+              hint="0 = 关闭；默认 3；后台 4s 轮询，过期后先回旧值、后台重算不阻塞"
+            />
+            <NumField
+              label="扩展源详情缓存 (s)"
+              value={cache.ext_detail_ttl}
+              onChange={v => setCacheField('ext_detail_ttl', v)}
+              hint="0 = 关闭；默认 600；扩展源详情回源要等上游响应（秒级），管理端刷新后即时失效"
             />
             <NumField
               label="缓存键上限"
