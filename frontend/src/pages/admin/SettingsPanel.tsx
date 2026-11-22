@@ -1,111 +1,44 @@
 import * as React from 'react'
-import { Activity, Loader2, RefreshCw, Save } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Panel } from '@/components/panel'
-import {
-  adminChangePassword, adminNetwork, adminSaveSettings, adminTestCredential,
-} from '../../api/client'
-import type { AdminSettings, CacheSettings, CrawlSettings, NetworkStatus, SecuritySettings } from '../../api/types'
-import { TYPE_LABEL, TYPE_ORDER } from '../../api/types'
-import { NumField, Toggle } from './parts'
+import { adminChangePassword } from '../../api/client'
+import type { AdminSettings, CacheSettings, SecuritySettings, ServerSettings,
+} from '../../api/types'
+import { NumField } from './parts'
 
+// 全局运行参数：查询缓存、限流与安全、服务器与面板、管理员密码。
+// 本页改动自动保存（AdminPage 统一防抖）；密码是凭据动作走显式表单。
+// 来源相关配置（启用/顺序/评分权重/凭据/抓取参数/出站网络）在「抓取设置」tab。
 export function SettingsPanel({
   settings,
-  onSaved,
-  onError,
+  onChangeDraft,
 }: {
   settings: AdminSettings
-  onSaved: (msg: string) => Promise<void>
-  onError: (msg: string) => void
+  /** 修改设置草稿（AdminPage 持有，自动保存） */
+  onChangeDraft: (updater: (d: AdminSettings) => AdminSettings) => void
 }) {
-  const [crawl, setCrawl] = React.useState<CrawlSettings>(settings.crawl)
-  const [cache, setCache] = React.useState<CacheSettings>(settings.cache)
-  const [security, setSecurity] = React.useState<SecuritySettings>(settings.security)
-  const [token, setToken] = React.useState('')
-  const [cookie, setCookie] = React.useState('')
-  const [clearToken, setClearToken] = React.useState(false)
-  const [clearCookie, setClearCookie] = React.useState(false)
-  const [busy, setBusy] = React.useState(false)
-  const [testMsg, setTestMsg] = React.useState('')
+  const cache = settings.cache
+  const security = settings.security
+  const server = settings.server
 
   const [currentPw, setCurrentPw] = React.useState('')
   const [nextPw, setNextPw] = React.useState('')
   const [pwMsg, setPwMsg] = React.useState('')
 
-  const [net, setNet] = React.useState<NetworkStatus | null>(null)
-  const [netBusy, setNetBusy] = React.useState(false)
-
-  const loadNet = React.useCallback(async () => {
-    setNetBusy(true)
-    try {
-      setNet(await adminNetwork())
-    } catch {
-      /* 诊断失败不阻塞设置页 */
-    } finally {
-      setNetBusy(false)
-    }
-  }, [])
-
-  React.useEffect(() => {
-    void loadNet()
-  }, [loadNet])
-
-  React.useEffect(() => {
-    setCrawl(settings.crawl)
-    setCache(settings.cache)
-    setSecurity(settings.security)
-  }, [settings])
-
-  function set<K extends keyof CrawlSettings>(key: K, value: CrawlSettings[K]) {
-    setCrawl(c => ({ ...c, [key]: value }))
-  }
-
+  // 本面板没有保存按钮：修改即自动保存（AdminPage 统一防抖上送）。
+  // 管理员密码是凭据动作，保持显式表单，不参与自动保存。
   function setCacheField<K extends keyof CacheSettings>(key: K, value: CacheSettings[K]) {
-    setCache(c => ({ ...c, [key]: value }))
+    onChangeDraft(d => ({ ...d, cache: { ...d.cache, [key]: value } }))
   }
 
   function setSecField<K extends keyof SecuritySettings>(key: K, value: SecuritySettings[K]) {
-    setSecurity(s => ({ ...s, [key]: value }))
+    onChangeDraft(d => ({ ...d, security: { ...d.security, [key]: value } }))
   }
 
-  async function save() {
-    setBusy(true)
-    try {
-      await adminSaveSettings({
-        crawl,
-        cache,
-        security,
-        bgm: {
-          token: token.trim() || undefined,
-          cookie: cookie.trim() || undefined,
-          clear_token: clearToken,
-          clear_cookie: clearCookie,
-        },
-      })
-      setToken('')
-      setCookie('')
-      setClearToken(false)
-      setClearCookie(false)
-      await onSaved('设置已保存')
-    } catch (e) {
-      onError(e instanceof Error ? e.message : '保存失败')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function test() {
-    setTestMsg('校验中…')
-    try {
-      const res = await adminTestCredential()
-      setTestMsg(`校验通过：${JSON.stringify(res)}`)
-    } catch (e) {
-      setTestMsg(e instanceof Error ? e.message : '校验失败')
-    }
+  function setSrvField<K extends keyof ServerSettings>(key: K, value: ServerSettings[K]) {
+    onChangeDraft(d => ({ ...d, server: { ...d.server, [key]: value } }))
   }
 
   async function changePassword() {
@@ -122,46 +55,6 @@ export function SettingsPanel({
 
   return (
     <div className="space-y-4">
-      <Panel title="抓取设置" contentClassName="space-y-4">
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">抓取类型</p>
-            <div className="flex flex-wrap gap-x-5 gap-y-2">
-              {TYPE_ORDER.map(t => (
-                <label key={t} className="flex items-center gap-1.5 text-sm">
-                  <Checkbox
-                    checked={crawl.types.includes(t)}
-                    onCheckedChange={() =>
-                      set(
-                        'types',
-                        crawl.types.includes(t)
-                          ? crawl.types.filter(x => x !== t)
-                          : [...crawl.types, t],
-                      )
-                    }
-                  />
-                  {TYPE_LABEL[t]}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <NumField label="每页条数" value={crawl.page_size} onChange={v => set('page_size', v)} hint="10–100" />
-            <NumField label="请求间隔 (ms)" value={crawl.delay_ms} onChange={v => set('delay_ms', v)} hint="越大越礼貌" />
-            <NumField label="请求超时 (s)" value={crawl.request_timeout_sec} onChange={v => set('request_timeout_sec', v)} />
-            <NumField label="重爬 TTL (天)" value={crawl.refresh_ttl_days} onChange={v => set('refresh_ttl_days', v)} />
-            <NumField label="重爬批量" value={crawl.refresh_batch} onChange={v => set('refresh_batch', v)} hint="0 = 不自动重爬" />
-            <NumField label="增量页数 / 类型" value={crawl.incremental_pages} onChange={v => set('incremental_pages', v)} />
-            <NumField label="增量间隔 (分钟)" value={crawl.incremental_interval_min} onChange={v => set('incremental_interval_min', v)} />
-          </div>
-
-          <div className="flex flex-wrap gap-x-6 gap-y-2 border-t pt-3">
-            <Toggle label="自动增量" checked={crawl.auto_incremental} onChange={v => set('auto_incremental', v)} />
-            <Toggle label="自动重爬过期" checked={crawl.auto_refresh} onChange={v => set('auto_refresh', v)} />
-            <Toggle label="全量后清理旧数据" checked={crawl.prune_on_full} onChange={v => set('prune_on_full', v)} />
-          </div>
-      </Panel>
-
       <Panel title="查询缓存" contentClassName="space-y-3">
           <p className="text-xs leading-relaxed text-muted-foreground">
             搜索页 / 搜索总数 / 标签候选 / 条目详情共用进程内结果缓存，抓取收尾与管理端删改条目时会主动失效，
@@ -263,131 +156,57 @@ export function SettingsPanel({
               hint="100–100000，默认 5000；深分页成本上限"
             />
           </div>
+          {/* 真实 IP 识别（原环境变量迁入）：保存时后端校验 CIDR 合法性，非法拒绝 */}
+          <div className="grid gap-3 border-t pt-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor="sec-ip-header" className="text-xs text-muted-foreground">
+                客户端真实 IP 请求头
+                <span className="text-muted-foreground">（选填）</span>
+              </Label>
+              <Input
+                id="sec-ip-header"
+                value={security.client_ip_header}
+                onChange={e => setSecField('client_ip_header', e.target.value)}
+                placeholder="如 CF-Connecting-IP；留空 = 用 TCP 对端"
+                className="h-9 font-mono text-xs"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="sec-trusted-cidrs" className="text-xs text-muted-foreground">
+                可信反代网段
+                <span className="text-muted-foreground">（逗号分隔 CIDR；选填）</span>
+              </Label>
+              <Input
+                id="sec-trusted-cidrs"
+                value={security.trusted_proxy_cidrs}
+                onChange={e => setSecField('trusted_proxy_cidrs', e.target.value)}
+                placeholder="173.245.48.0/20,103.21.244.0/22"
+                className="h-9 font-mono text-xs"
+              />
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                配了头就必须配网段：只有对端在网段内才采信头，防伪造绕过限流。Cloudflare 网段见 cloudflare.com/ips。
+              </p>
+            </div>
+          </div>
       </Panel>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="站长 Bangumi 凭据" contentClassName="space-y-3">
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              仅用于后台抓取。配置后可以抓取需要登录的条目；凭据保存在数据库（配置
-              <code className="mx-1 rounded bg-muted px-1 py-0.5">ANIPICK_SECRET</code> 时加密）。
-            </p>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="admin-token" className="text-xs">
-                Access Token{' '}
-                <span className="text-muted-foreground">
-                  {settings.bgm.token_configured ? `（已配置 ${settings.bgm.token}）` : '（未配置）'}
-                </span>
-              </Label>
-              <Input
-                id="admin-token"
-                value={token}
-                onChange={e => setToken(e.target.value)}
-                placeholder={settings.bgm.token_configured ? '留空表示不修改' : '粘贴 Access Token'}
-                className="h-9 font-mono text-xs"
-              />
-              {settings.bgm.token_configured && (
-                <Toggle label="清除 Token" checked={clearToken} onChange={setClearToken} />
-              )}
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="admin-cookie" className="text-xs">
-                Cookie{' '}
-                <span className="text-muted-foreground">
-                  {settings.bgm.cookie_configured ? `（已配置 ${settings.bgm.cookie}）` : '（未配置）'}
-                </span>
-              </Label>
-              <Input
-                id="admin-cookie"
-                value={cookie}
-                onChange={e => setCookie(e.target.value)}
-                placeholder={settings.bgm.cookie_configured ? '留空表示不修改' : 'chii_sid=…; chii_auth=…'}
-                className="h-9 font-mono text-xs"
-              />
-              {settings.bgm.cookie_configured && (
-                <Toggle label="清除 Cookie" checked={clearCookie} onChange={setClearCookie} />
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => void test()} className="gap-1.5">
-                <Activity size={14} aria-hidden /> 校验凭据
-              </Button>
-              {testMsg && (
-                <span className="max-w-full break-all text-[11px] text-muted-foreground">{testMsg}</span>
-              )}
-            </div>
-        </Panel>
-
-        <Panel
-          title="抓取出口"
-          action={
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={netBusy}
-              onClick={() => void loadNet()}
-              className="gap-1.5 text-muted-foreground"
-            >
-              {netBusy ? (
-                <Loader2 size={13} className="animate-spin" aria-hidden />
-              ) : (
-                <RefreshCw size={13} aria-hidden />
-              )}
-              重新检测
-            </Button>
-          }
-          contentClassName="space-y-3"
-        >
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={net?.proxy ? 'default' : 'secondary'} className="font-normal">
-                出口 {net?.proxy ? '代理' : net?.doh ? 'DoH 直连' : '未配置'}
-              </Badge>
-              {!net?.proxy && (
-                <Badge variant={net?.doh ? 'default' : 'secondary'} className="font-normal">
-                  DoH {net?.doh ? '已启用' : '未启用'}
-                </Badge>
-              )}
-              <Badge variant={net?.upstream_ok ? 'secondary' : 'destructive'} className="font-normal">
-                上游 {net?.upstream_ok ? '可达' : '不可达'}
-              </Badge>
-            </div>
-            <dl className="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
-              <div className="flex gap-2">
-                <dt className="shrink-0">解析地址</dt>
-                <dd className="break-all font-mono text-[11px]">
-                  {net?.diagnostics?.addresses?.join('，') || '—'}
-                </dd>
-              </div>
-              <div className="flex gap-2">
-                <dt className="shrink-0">DoH 入口</dt>
-                <dd className="break-all font-mono text-[11px]">
-                  {net?.diagnostics?.endpoints?.join('，') || '—'}
-                </dd>
-              </div>
-              {net?.upstream_error && (
-                <div className="flex gap-2 text-destructive">
-                  <dt className="shrink-0">上游错误</dt>
-                  <dd className="break-all">{net.upstream_error}</dd>
-                </div>
-              )}
-              {net?.diagnostics?.error && (
-                <div className="flex gap-2 text-destructive">
-                  <dt className="shrink-0">诊断失败</dt>
-                  <dd className="break-all">{net.diagnostics.error}</dd>
-                </div>
-              )}
-            </dl>
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              该通道只用于服务端抓取，不中转访客请求。可用
-              <code className="mx-1 rounded bg-muted px-1 py-0.5">ANIPICK_EGRESS_PROXY</code>
-              配置抓取代理；否则走 DoH 解析。
-            </p>
-        </Panel>
-      </div>
-
+      {/* 服务器与面板：原为代码常量的运行参数；默认即推荐值，改动主要影响管理面与进程行为 */}
+      <Panel title="服务器与面板" contentClassName="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <NumField label="会话校验缓存 (s)" value={server.session_cache_ttl_sec} onChange={n => setSrvField('session_cache_ttl_sec', n)} hint="默认 60 · 范围 5–600；命中时零数据库开销" />
+          <NumField label="会话落库节流 (s)" value={server.session_seen_gap_sec} onChange={n => setSrvField('session_seen_gap_sec', n)} hint="默认 600 · last_seen 至多隔这么久写一次库" />
+          <NumField label="会话缓存上限 (条)" value={server.session_cache_max} onChange={n => setSrvField('session_cache_max', n)} hint="默认 512 · 内存有界" />
+          <NumField label="压缩阈值 (字节)" value={server.min_compress_bytes} onChange={n => setSrvField('min_compress_bytes', n)} hint="默认 860 · 更小的响应压缩反而变本加厉，不压" />
+          <NumField label="设置快照刷新 (s)" value={server.snapshot_ttl_sec} onChange={n => setSrvField('snapshot_ttl_sec', n)} hint="默认 60 · 兜底刷新；保存后立即生效不走此周期" />
+          <NumField label="每路由样本上限" value={server.perf_sample_cap} onChange={n => setSrvField('perf_sample_cap', n)} hint="默认 256 · 范围 32–4096；算 p95 用" />
+          <NumField label="近期请求上限" value={server.recent_req_cap} onChange={n => setSrvField('recent_req_cap', n)} hint="默认 256 · 范围 32–4096；性能页环形缓冲" />
+          <NumField label="总览任务条数" value={server.overview_runs} onChange={n => setSrvField('overview_runs', n)} hint="默认 24 · 范围 5–100；概览页最近任务显示数" />
+          <NumField label="优雅停机等待 (s)" value={server.shutdown_wait_sec} onChange={n => setSrvField('shutdown_wait_sec', n)} hint="默认 10 · 范围 1–120；关闭进程时等在途请求收尾" />
+          <NumField label="面板轮询间隔 (s)" value={server.admin_poll_sec} onChange={n => setSrvField('admin_poll_sec', n)} hint="默认 4 · 范围 2–60；页面隐藏时自动暂停" />
+          <NumField label="返回缓存页数" value={server.page_cache_max} onChange={n => setSrvField('page_cache_max', n)} hint="默认 12 · 0 = 关闭返回不还原滚动" />
+          <NumField label="元标签缓存键上限" value={cache.meta_tags_max_keys} onChange={n => setCacheField('meta_tags_max_keys', n)} hint="默认 64 · 内存有界" />
+        </div>
+      </Panel>
       <Panel title="管理员密码" contentClassName="flex flex-wrap items-end gap-3">
           <div className="space-y-1.5">
             <Label htmlFor="admin-current-pw" className="text-xs text-muted-foreground">
@@ -424,15 +243,9 @@ export function SettingsPanel({
           {pwMsg && <span className="text-xs text-muted-foreground">{pwMsg}</span>}
       </Panel>
 
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        <span className="mr-auto text-[11px] text-muted-foreground">
-          更新于 {settings.updated_at ? settings.updated_at.slice(0, 16).replace('T', ' ') : '—'}
-        </span>
-        <Button onClick={() => void save()} disabled={busy} className="gap-1.5">
-          {busy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <Save size={14} aria-hidden />}
-          保存设置
-        </Button>
-      </div>
+      <p className="text-right text-[11px] text-muted-foreground">
+        本页修改即自动保存（右上角有保存状态）；管理员密码单独提交。
+      </p>
     </div>
   )
 }

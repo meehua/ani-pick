@@ -2,6 +2,7 @@
   "project": [
     "src/**/*.{ts,tsx}"
   ],
+  "ignoreExportsUsedInFile": true,
   "ignoreIssues": {
     "src/components/ui/**": [
       "exports"

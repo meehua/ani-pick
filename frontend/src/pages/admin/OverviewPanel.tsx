@@ -1,6 +1,6 @@
 import { Panel } from '@/components/panel'
 import type { AdminOverview } from '../../api/types'
-import { TYPE_LABEL, TYPE_ORDER } from '../../api/types'
+import { kindCounts, kindLabel } from '../../api/vocab'
 import { fmtBytes, fmtDate, fmtDateTime, fmtNum } from '../../lib/format'
 import { CrawlStatusCard, RunsTable, Stat } from './parts'
 
@@ -42,18 +42,18 @@ export function OverviewPanel({
 
       {stats && (
         <Panel contentClassName="flex flex-wrap items-center gap-x-6 gap-y-2">
-          <span className="text-xs text-muted-foreground">类型构成</span>
-          {TYPE_ORDER.map(t => (
-            <span key={t} className="flex items-baseline gap-1.5 text-xs">
-              {TYPE_LABEL[t]}
-              <b className="num font-medium">{fmtNum(stats.by_type[String(t)] ?? 0)}</b>
+          <span className="text-xs text-muted-foreground">分类构成</span>
+          {kindCounts(stats.by_type).map(k => (
+            <span key={k.kind} className="flex items-baseline gap-1.5 text-xs">
+              {kindLabel(k.kind)}
+              <b className="num font-medium">{fmtNum(k.count ?? 0)}</b>
             </span>
           ))}
         </Panel>
       )}
 
       <CrawlStatusCard status={crawler ?? null} onCancel={onCancelCrawl} />
-      <RunsTable runs={overview?.runs ?? []} />
+      <RunsTable />
     </div>
   )
 }

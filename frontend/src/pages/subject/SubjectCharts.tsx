@@ -176,6 +176,27 @@ export function TagBars({ tags }: { tags: TagVote[] }) {
   const sorted = [...tags].sort((a, b) => b.votes - a.votes).slice(0, 40)
   const max = sorted[0]?.votes ?? 1
 
+  // 扩展源（tmdb/itunes/mal/anilist）的标签没有票数：柱状图没有信息量，
+  // 有标签时退化成纯词条（来源提供的类型/题材名）。不做跳转——浏览页的
+  // 标签筛选建立在原生票数统计上，扩展源标签点过去只会是空结果。
+  if (max <= 0) {
+    if (tags.length === 0) {
+      return <p className="py-6 text-center text-xs text-(--stage-fg)/50">暂无标签数据</p>
+    }
+    return (
+      <div className="flex flex-wrap gap-1.5 px-5 py-2">
+        {tags.slice(0, 40).map(t => (
+          <span
+            key={t.name}
+            className="rounded-md border border-(--stage-line) bg-(--stage-glass) px-2 py-0.5 text-xs text-(--stage-fg)/80"
+          >
+            {t.name}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
   // 动态边缘遮罩：左有内容才虚化左侧，右有内容才虚化右侧。
   // 虚化带宽两侧一致，且等于内容留白（px-5 = 20px）——只糊留白区，两端的柱子
   // 都是完整滑入，左右到边的行为对称。

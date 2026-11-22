@@ -11,18 +11,10 @@ import { PosterCard } from '@/components/subject-views'
 import { ErrorNote } from '@/components/ui-kit'
 import { getMetaTags, img, searchSubjects } from '../api/client'
 import type { Subject, TagStat } from '../api/types'
-import { TYPE_LABEL, TYPE_ORDER } from '../api/types'
+import { codesOfKind, kindCounts, kindHint, kindLabel, quickLinks } from '../api/vocab'
 import { ERAS } from '../lib/eras'
 import { fmtCount, fmtDate, fmtNumParts } from '../lib/format'
 import { useMeta } from '../lib/use-meta'
-
-const QUICK = [
-  { label: '高分口碑', to: '/browse?sort=score&rating_min=50' },
-  { label: '近一年', to: `/browse?date_from=${new Date().getFullYear() - 1}-01-01` },
-  { label: '剧场版', to: '/browse?tags=%E5%89%A7%E5%9C%BA%E7%89%88' },
-  { label: '原创', to: '/browse?tags=%E5%8E%9F%E5%88%9B' },
-  { label: '科幻', to: '/browse?tags=%E7%A7%91%E5%B9%BB' },
-]
 
 function seededShuffle<T>(arr: T[], seed: number): T[] {
   const a = [...arr]
@@ -33,14 +25,6 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
     ;[a[i], a[j]] = [a[j], a[i]]
   }
   return a
-}
-
-const TYPE_HINT: Record<number, string> = {
-  1: '漫画 / 小说 / 画集',
-  2: 'TV / 剧场版 / OVA',
-  3: '专辑 / 单曲 / OST',
-  4: 'PC / 主机 / 手游',
-  6: '日剧 / 欧美剧 / 综艺',
 }
 
 const HOW = [
@@ -116,6 +100,9 @@ function Shelf({
 
 export default function HomePage() {
   const meta = useMeta()
+  // 首页快捷入口不在前端写死：登记表 QuickLinks 经 manifest 下发
+  //（vocab.quickLinks 把 {year} 占位符替换为去年年份）；未到达时行隐藏
+  const QUICK = quickLinks()
   const [doing, setDoing] = React.useState<Subject[]>([])
   const [recent, setRecent] = React.useState<Subject[]>([])
   const [top, setTop] = React.useState<Subject[]>([])
@@ -212,7 +199,7 @@ export default function HomePage() {
 
             {meta && (
               <p className="num mt-5 text-xs text-(--stage-fg)/45">
-                {fmtCount(meta.stats.tags)}个标签 · {TYPE_ORDER.length} 种类型 · 最近更新{' '}
+                {fmtCount(meta.stats.tags)}个标签 · {kindCounts(meta?.stats.by_type).length} 种分类 · 最近更新{' '}
                 {fmtDate(meta.stats.last_fetched)}
               </p>
             )}
@@ -254,21 +241,23 @@ export default function HomePage() {
       {error ? <ErrorNote error={error} /> : null}
 
       <section>
-        <SectionHead title="按类型浏览" />
-        <div data-testid="type-grid" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-          {TYPE_ORDER.map(t => (
+        <SectionHead title="按分类浏览" />
+        {/* 分类（kind 层）口径：站点的通用类目，计数把各源同分类的原生类型求和；
+            各源自己的原生类型叫法在详情页与来源徽标里展示，永不改名。 */}
+        <div data-testid="type-grid" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          {kindCounts(meta?.stats.by_type).map(k => (
             <Link
-              key={t}
-              to={`/browse?types=${t}&sort=rank`}
+              key={k.kind}
+              to={`/browse?types=${codesOfKind(k.kind).join(',')}&sort=rank`}
               className="group rounded-lg border p-3 transition-colors hover:bg-muted/50"
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">{TYPE_LABEL[t]}</span>
+                <span className="text-sm font-medium">{kindLabel(k.kind)}</span>
                 <span className="text-xs tabular-nums text-muted-foreground">
-                  {meta ? fmtCount(meta.stats.by_type[String(t)] ?? 0) : '—'}
+                  {k.count === undefined ? '—' : fmtCount(k.count)}
                 </span>
               </div>
-              <p className="mt-0.5 text-xs text-muted-foreground">{TYPE_HINT[t]}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{kindHint(k.kind)}</p>
             </Link>
           ))}
         </div>

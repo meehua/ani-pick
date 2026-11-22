@@ -2,7 +2,8 @@ import { Link } from 'react-router-dom'
 import { Cover } from './cover'
 import { Table, TableBody, TableHeader, TableRow } from './ui/table'
 import { Th, Td } from './table-bits'
-import { TYPE_LABEL, type Subject } from '../api/types'
+import { isExtSource, sourceLabel, typeLabel } from '../api/vocab'
+import type { Subject } from '../api/types'
 import { fmtNum, yearOf } from '../lib/format'
 
 function titleOf(s: Subject): string {
@@ -29,9 +30,9 @@ export function PosterCard({ subject, priority = false }: { subject: Subject; pr
       : titleOf(subject)
   const tagLine = subject.tags
     ?.slice(0, 3)
-    .map(t => `${t.name} ${t.pct.toFixed(0)}%`)
+    .map(t => (t.pct > 0 ? `${t.name} ${t.pct.toFixed(0)}%` : t.name)) // 扩展源无占比，只显示名字
     .join(' · ')
-  const badge = [TYPE_LABEL[subject.type] ?? '其他', subject.date ? yearOf(subject.date) : '']
+  const badge = [typeLabel(subject.type, subject.source), subject.date ? yearOf(subject.date) : '']
     .filter(Boolean)
     .join(' · ')
   const hasOverlay =
@@ -88,6 +89,12 @@ export function PosterCard({ subject, priority = false }: { subject: Subject; pr
           {subject.name}
         </p>
       )}
+      {/* 来源徽标：小字号 muted，只标注扩展源（bgm 是主体不重复刷屏） */}
+      {isExtSource(subject.source) && (
+        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+          {sourceLabel(subject.source)}
+        </p>
+      )}
     </Link>
   )
 }
@@ -113,7 +120,7 @@ export function DenseRow({ subject }: { subject: Subject }) {
             {titleOf(subject)}
           </h3>
           <span className="shrink-0 text-xs text-muted-foreground">
-            {TYPE_LABEL[subject.type] ?? '其他'} · {yearOf(subject.date)}
+            {typeLabel(subject.type, subject.source)} · {yearOf(subject.date)}
           </span>
         </div>
         {subject.name_cn && subject.name_cn !== subject.name && (
@@ -171,7 +178,7 @@ export function SubjectTable({ subjects }: { subjects: Subject[] }) {
                 </div>
               </div>
             </Td>
-            <Td className="text-muted-foreground">{TYPE_LABEL[s.type] ?? '其他'}</Td>
+            <Td className="text-muted-foreground">{typeLabel(s.type, s.source)}</Td>
             <Td className="num text-right text-muted-foreground">{yearOf(s.date)}</Td>
             <Td className="num text-right font-medium">{scoreOf(s)}</Td>
             <Td className="num text-right text-muted-foreground">{fmtNum(s.rating_total)}</Td>

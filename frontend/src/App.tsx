@@ -233,11 +233,10 @@ function Shell() {
                 <BuildStatus />
               </div>
             </div>
+            {/* 来源署名在条目详情里逐条展示（各源徽标与官方外链）；
+                页脚是公共区域，不再固定指向某个来源 */}
             <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
-              <a href="https://bgm.tv" target="_blank" rel="noreferrer" className="hover:text-foreground">
-                bgm.tv
-              </a>
-
+              <span>条目数据与评分来自各收录来源，详情页逐条署名</span>
             </div>
           </div>
         </footer>

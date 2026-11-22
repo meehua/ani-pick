@@ -6,21 +6,25 @@ import { Cover } from '@/components/cover'
 import { TagProportion } from '@/components/data-bits'
 import { BackLink, ErrorNote, Notice } from '@/components/ui-kit'
 import { ApiError } from '../../api/client'
-import { TYPE_LABEL } from '../../api/types'
+import { sourceLabel, typeLabel } from '../../api/vocab'
 import type { Subject as IndexedSubject } from '../../api/types'
 import { titleOf } from './shared'
 
 // 上游详情不可用，但本站索引仍有数据：降级展示。
+// bgm 的详情由浏览器直连获取（提示登录/通道）；扩展源由服务端代理获取（提示稍后重试）。
 export function SubjectFallback({
   index,
   loading,
   error,
+  ext,
   onLogin,
   onRetry,
 }: {
   index: IndexedSubject | null
   loading: boolean
   error: unknown
+  /** 扩展源（或未入库的扩展 id）：文案与操作与 bgm 不同 */
+  ext?: boolean
   onLogin: () => void
   onRetry: () => void
 }) {
@@ -38,7 +42,7 @@ export function SubjectFallback({
               className="aspect-[5/7] w-full rounded-lg border"
             />
             <div className="min-w-0">
-              <Badge variant="secondary">{TYPE_LABEL[index.type] ?? '其他'}</Badge>
+              <Badge variant="secondary">{typeLabel(index.type, index.source)}</Badge>
               <h1 className="mt-2 text-xl font-semibold sm:text-2xl">{titleOf(index)}</h1>
               {index.name_cn && index.name_cn !== index.name && (
                 <p className="mt-1 text-sm text-muted-foreground">{index.name}</p>
@@ -53,6 +57,13 @@ export function SubjectFallback({
                   <span className="inline-flex items-center gap-2">
                     <RefreshCw size={13} className="animate-spin" aria-hidden /> 正在获取条目详情…
                   </span>
+                ) : ext ? (
+                  <>
+                    <b className="text-foreground">{apiErr?.message ?? '详情加载失败'}</b>
+                    <span className="mt-1 block">
+                      {apiErr?.hint ?? `该条目来自 ${sourceLabel(index?.source)}，详情由服务端代理获取，上游暂时不可用。`}
+                    </span>
+                  </>
                 ) : (
                   <>
                     <b className="text-foreground">
@@ -64,12 +75,16 @@ export function SubjectFallback({
                   </>
                 )}
                 <span className="mt-3 flex flex-wrap gap-2">
-                  <Button size="sm" onClick={onLogin} className="gap-1.5">
-                    <KeyRound size={14} aria-hidden /> 使用我的账号登录
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={onLogin} className="gap-1.5">
-                    <Server size={14} aria-hidden /> 切换数据通道
-                  </Button>
+                  {!ext && (
+                    <>
+                      <Button size="sm" onClick={onLogin} className="gap-1.5">
+                        <KeyRound size={14} aria-hidden /> 使用我的账号登录
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={onLogin} className="gap-1.5">
+                        <Server size={14} aria-hidden /> 切换数据通道
+                      </Button>
+                    </>
+                  )}
                   {!loading && (
                     <Button size="sm" variant="outline" className="gap-1.5" onClick={onRetry}>
                       <RefreshCw size={14} aria-hidden /> 重试
@@ -95,9 +110,11 @@ export function SubjectFallback({
       ) : (
         <div className="space-y-3">
           <ErrorNote error={error} onRetry={onRetry} />
-          <Button size="sm" variant="outline" onClick={onLogin} className="gap-1.5">
-            <KeyRound size={14} aria-hidden /> 登录 Bangumi
-          </Button>
+          {!ext && (
+            <Button size="sm" variant="outline" onClick={onLogin} className="gap-1.5">
+              <KeyRound size={14} aria-hidden /> 登录 Bangumi
+            </Button>
+          )}
         </div>
       )}
     </div>

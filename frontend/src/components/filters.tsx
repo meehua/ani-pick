@@ -11,7 +11,8 @@ import {
   Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'
 import { RemovableChip } from './ui-kit'
-import { TYPE_LABEL, TYPE_ORDER, type TagStat } from '../api/types'
+import { codesOfKind, kindCounts, kindLabel, kindOf, sourceLabel, typeLabel } from '../api/vocab'
+import type { TagStat } from '../api/types'
 import { fmtNum } from '../lib/format'
 import { MetaTagField, TagField } from './tag-field'
 import { ERAS } from '../lib/eras'
@@ -22,6 +23,7 @@ export type PatchFn = (next: Record<string, PatchValue>, resetPage?: boolean) =>
 
 export interface ActiveFilterState {
   keyword?: string
+  source?: string
   types: number[]
   tags: string[]
   exclude: string[]
@@ -56,37 +58,45 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <p className="mb-2 text-xs font-medium text-muted-foreground">{children}</p>
 }
 
+// 作品类型 chips 是站点分类（kind 层）：选一个分类 = 选中它名下的全部
+// 原生类型编码（如「剧集」同时含三次元与电视季）。各源的原生叫法在
+// 来源徽标与详情页展示，筛选这里用站点通用类目。
 function TypeButtons({
   types,
   onChange,
   className,
+  byType,
 }: {
   types: number[]
   onChange: (v: number[]) => void
   className?: string
+  /** 索引里各分类的实际条目数（chips 按此出现；meta 未到时全部分类都出现） */
+  byType?: Record<string, number>
 }) {
-  const value = types.length ? types.map(String) : ['all']
+  const cards = kindCounts(byType)
+  const selected = new Set(types.map(t => kindOf(t)).filter((k): k is string => !!k))
+  const value = selected.size ? [...selected] : ['all']
   return (
     <ToggleGroup
       type="multiple"
       value={value}
       onValueChange={v => {
         const hasAll = v.includes('all')
-        const rest = v.filter(x => x !== 'all').map(Number)
-        if (types.length === 0) {
-          onChange(hasAll ? (rest.length ? rest : []) : rest)
-        } else {
-          onChange(hasAll ? [] : rest)
-        }
+        const kinds = v.filter(x => x !== 'all')
+        // 分类 → 该分类名下全部类型编码的并集
+        const codes = [...new Set(kinds.flatMap(k => codesOfKind(k)))]
+        // 从「全部」直接点分类时 ToggleGroup 会同时带上 'all'：此时按分类走；
+        // 已有选中时点「全部」= 清空类型。
+        onChange(hasAll ? (types.length === 0 ? codes : []) : codes)
       }}
       className={cn('flex w-full flex-wrap gap-1.5', className)}
     >
       <ToggleGroupItem value="all" className={cn(ctl.bar, 'px-2 text-xs', ctl.on)}>
         全部
       </ToggleGroupItem>
-      {TYPE_ORDER.map(t => (
-        <ToggleGroupItem key={t} value={String(t)} className={cn(ctl.bar, 'px-2 text-xs', ctl.on)}>
-          {TYPE_LABEL[t]}
+      {cards.map(k => (
+        <ToggleGroupItem key={k.kind} value={k.kind} className={cn(ctl.bar, 'px-2 text-xs', ctl.on)}>
+          {kindLabel(k.kind)}
         </ToggleGroupItem>
       ))}
     </ToggleGroup>
@@ -359,16 +369,19 @@ export function FilterPanel({
   filters,
   patch,
   metaTagOptions,
+  byType,
 }: {
   filters: ActiveFilterState
   patch: PatchFn
   metaTagOptions: TagStat[]
+  /** 索引里各分类的条目数（作品分类 chips 按此显隐） */
+  byType?: Record<string, number>
 }) {
   return (
     <div className="space-y-5">
       <section className="space-y-1.5">
-        <SectionLabel>作品类型</SectionLabel>
-        <TypeButtons types={filters.types} onChange={v => patch({ types: v })} />
+        <SectionLabel>作品分类</SectionLabel>
+        <TypeButtons types={filters.types} onChange={v => patch({ types: v })} byType={byType} />
       </section>
 
       <section>
@@ -461,6 +474,7 @@ export function FilterSheet({
   filters,
   patch,
   metaTagOptions,
+  byType,
   total,
   onResetAll,
 }: {
@@ -469,6 +483,8 @@ export function FilterSheet({
   filters: ActiveFilterState
   patch: PatchFn
   metaTagOptions: TagStat[]
+  /** 索引里各分类的条目数（作品分类 chips 按此显隐） */
+  byType?: Record<string, number>
   total?: number
   onResetAll: () => void
 }) {
@@ -487,6 +503,7 @@ export function FilterSheet({
             filters={filters}
             patch={patch}
             metaTagOptions={metaTagOptions}
+            byType={byType}
           />
         </div>
 
@@ -523,12 +540,45 @@ export function ActiveFilters({
       remove: () => patch({ keyword: undefined }),
     })
   }
-  for (const t of filters.types) {
+  if (filters.source) {
     chips.push({
-      key: `type-${t}`,
-      label: TYPE_LABEL[t] ?? String(t),
-      remove: () => patch({ types: filters.types.filter(x => x !== t) }),
+      key: 'source',
+      label: `来源：${sourceLabel(filters.source)}`,
+      remove: () => patch({ source: undefined }),
     })
+  }
+  // 类型筛选按站点分类（kind 层）汇总成 chips：某分类的全部编码都在选中集
+  // 里时合成一枚（如「剧集」= 三次元 + 电视季）；部分选中或未归类的编码
+  // 退回原生标签逐枚展示。
+  const kindsSeen = new Map<string, number[]>()
+  const loose: number[] = []
+  for (const t of filters.types) {
+    const k = kindOf(t)
+    if (!k) {
+      loose.push(t)
+      continue
+    }
+    const arr = kindsSeen.get(k) ?? []
+    arr.push(t)
+    kindsSeen.set(k, arr)
+  }
+  for (const [k, picked] of kindsSeen) {
+    const all = codesOfKind(k)
+    if (all.length > 0 && all.every(c => picked.includes(c))) {
+      chips.push({
+        key: `kind-${k}`,
+        label: kindLabel(k),
+        remove: () => patch({ types: filters.types.filter(x => !all.includes(x)) }),
+      })
+    } else {
+      for (const t of picked) {
+        chips.push({
+          key: `type-${t}`,
+          label: typeLabel(t),
+          remove: () => patch({ types: filters.types.filter(x => x !== t) }),
+        })
+      }
+    }
   }
   for (const t of filters.tags) {
     chips.push({

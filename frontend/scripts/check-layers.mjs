@@ -39,6 +39,17 @@ for (const file of files) {
   }
 }
 
+// 融合路径审计：多源信息融合是通用内核，不允许出现任何来源字面量或来源分支
+//（删掉任何一个源必须完全不影响融合逻辑）。测试见 scripts/fusion-test.mjs。
+{
+  const fusionPath = join(root, 'pages/subject/fusion.ts')
+  const text = readFileSync(fusionPath, 'utf8')
+  const hit = text.match(/\b(bgm|anilist|mal|tmdb|itunes|jikan)\b/i)
+  if (hit) {
+    errors.push(`pages/subject/fusion.ts 出现来源字面量 "${hit[0]}"（融合内核必须来源无关）`)
+  }
+}
+
 if (errors.length) {
   console.error(errors.join('\n'))
   process.exit(1)

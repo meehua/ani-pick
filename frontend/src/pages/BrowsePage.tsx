@@ -18,9 +18,11 @@ import {
 } from '@/components/filters'
 import { PageHead, EmptyState, ErrorNote } from '@/components/ui-kit'
 import { getMetaTags, searchSubjects } from '../api/client'
+import { kindOf, manifestSources, sourceLabel } from '../api/vocab'
 import type { SearchResult, TagStat } from '../api/types'
 import { loadPage, savePage } from '../lib/page-cache'
 import { useScrollMemory } from '../lib/use-scroll-memory'
+import { useMeta } from '../lib/use-meta'
 
 // 搜索框就在结果工具条里：输入即搜（350ms 防抖），回车立即；`/` 聚焦由 SearchInput 提供。
 function BrowseSearch({
@@ -136,6 +138,21 @@ export default function BrowsePage() {
 
   useScrollMemory(location.key, mountHit?.scrollTop ?? null)
 
+  // 站点元信息：分类 chips 按索引实际存在的分类显隐，来源 chips 按计数显隐
+  const meta = useMeta()
+  const byType = meta?.stats.by_type
+  const bySource = meta?.stats.by_source
+  // 来源 chips：bgm 常驻；扩展源只在已抓取（count>0）时出现
+  const presentSources = React.useMemo(
+    () => manifestSources().filter(s => s.native || (bySource?.[s.id] ?? 0) > 0).map(s => s.id),
+    [bySource],
+  )
+
+  const source = React.useMemo(() => {
+    const v = sp.get('source') ?? ''
+    return manifestSources().some(s => s.id === v) ? v : ''
+  }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const types = React.useMemo(() => csv(sp, 'types').map(Number).filter(n => !Number.isNaN(n)), [key]) // eslint-disable-line react-hooks/exhaustive-deps
   const tags = React.useMemo(() => csv(sp, 'tags'), [key]) // eslint-disable-line react-hooks/exhaustive-deps
   const exclude = React.useMemo(() => csv(sp, 'exclude'), [key]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -186,6 +203,7 @@ export default function BrowsePage() {
         const res = await searchSubjects(
           {
             keyword: sp.get('keyword') ?? undefined,
+            source: source || undefined,
             types,
             tags,
             exclude,
@@ -251,6 +269,7 @@ export default function BrowsePage() {
 
   const filters: ActiveFilterState = {
     keyword: sp.get('keyword') ?? undefined,
+    source: source || undefined,
     types,
     tags,
     exclude,
@@ -266,9 +285,14 @@ export default function BrowsePage() {
     nsfw,
   }
 
+  // 类型筛选的项数按分类层计（一个分类可能名下多个原生编码）
+  const selectedKinds = new Set(types.map(t => kindOf(t)).filter((k): k is string => !!k))
+  const typeFilterCount = selectedKinds.size + types.filter(t => !kindOf(t)).length
+
   const activeCount =
     (filters.keyword ? 1 : 0) +
-    types.length +
+    (source ? 1 : 0) +
+    typeFilterCount +
     tags.length +
     exclude.length +
     selectedMeta.length +
@@ -333,7 +357,12 @@ export default function BrowsePage() {
                 </div>
               </div>
               <div className="p-4">
-                <FilterPanel filters={filters} patch={patch} metaTagOptions={metaTags} />
+                <FilterPanel
+                  filters={filters}
+                  patch={patch}
+                  metaTagOptions={metaTags}
+                  byType={byType}
+                />
               </div>
             </div>
           </aside>
@@ -449,9 +478,32 @@ export default function BrowsePage() {
             )}
           </div>
 
+          {/* 来源 chips：全部 + 已抓取的来源（结果区筛选，条件写 URL）。
+              扩展源未抓取（count=0）时该来源不出现；计数一律显示（bgm 恒 >0） */}
+          {presentSources.length > 1 && (
+            <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">来源</span>
+              {presentSources.map(src => (
+                <Button
+                  key={src}
+                  type="button"
+                  size="xs"
+                  variant={source === src ? 'default' : 'outline'}
+                  className={cn(ctl.bar, 'px-2 text-xs')}
+                  title="计数为收录该来源的作品数（同作品多来源只计一次）"
+                  onClick={() => patch({ source: source === src ? undefined : src })}
+                >
+                  {sourceLabel(src)}
+                  {(bySource?.[src] ?? 0) > 0 && (
+                    <span className="num ml-1 text-[10px] opacity-60">{bySource?.[src]}</span>
+                  )}
+                </Button>
+              ))}
+            </div>
+          )}
+
           <div className="mb-2 mt-1.5 flex items-center justify-between gap-2">
-            <span className="num text-xs text-muted-foreground" aria-live="polite">
-              {loading && !data ? (
+            <span className="num text-xs text-muted-foreground" aria-live="polite">              {loading && !data ? (
                 '检索中…'
               ) : data ? (
                 <>
@@ -563,6 +615,7 @@ export default function BrowsePage() {
         filters={filters}
         patch={patch}
         metaTagOptions={metaTags}
+        byType={byType}
         total={data?.total}
         onResetAll={resetAll}
       />

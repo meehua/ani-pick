@@ -242,15 +242,22 @@ await check('管理后台登录与页面', async () => {
   await page.waitForURL('**/admin', { timeout: 8000 })
   await page.waitForSelector('text=索引条目')
   const body = await page.locator('body').innerText()
-  for (const t of ['概览', '抓取', '数据', '设置']) assert(body.includes(t), `缺少标签页 ${t}`)
+  // tab 顺序：概览 / 数据 / 抓取设置 / 性能 / 设置
+  for (const t of ['概览', '数据', '抓取设置', '性能', '设置']) assert(body.includes(t), `缺少标签页 ${t}`)
+  assert(!body.includes('数据源中心'), '旧 tab 名「数据源中心」应已改名')
   await page.screenshot({ path: `${SHOTS}/admin.png`, fullPage: true })
 
-  await page.getByRole('tab', { name: '数据' }).click()
+  await page.getByRole('tab', { name: '抓取设置' }).click()
+  await page.waitForTimeout(800)
+  assert((await page.locator('body').innerText()).includes('重新配对作品'), '抓取设置缺少重新配对作品')
+  await page.getByRole('tab', { name: '数据', exact: true }).click()
   await page.waitForTimeout(800)
   assert((await page.locator('table').count()) > 0, '数据页没有表格')
-  await page.getByRole('tab', { name: '设置' }).click()
+  await page.getByRole('tab', { name: '设置', exact: true }).click()
   await page.waitForTimeout(500)
-  assert((await page.locator('body').innerText()).includes('抓取设置'), '设置页缺少抓取设置')
+  const settingsBody = await page.locator('body').innerText()
+  assert(settingsBody.includes('查询缓存'), '设置页缺少查询缓存')
+  assert(!settingsBody.includes('抓取类型'), '来源抓取配置应已在抓取设置')
 })
 
 await check('主题跟随系统并可手动切换', async () => {

@@ -8,7 +8,8 @@ import { Th, Td } from '@/components/table-bits'
 import { Panel } from '@/components/panel'
 import { SearchInput } from '@/components/search-input'
 import { adminDeleteSubject, adminRefreshSubject, adminSearchSubjects } from '../../api/client'
-import { TYPE_LABEL, TYPE_ORDER, type SearchResult } from '../../api/types'
+import { sourceLabel, typeOrder, typeLabel } from '../../api/vocab'
+import type { SearchResult } from '../../api/types'
 import { fmtDateTime, fmtNum } from '../../lib/format'
 
 // 索引数据管理：关键词 / 类型 / 页码写进 URL（q / tp / pg）。
@@ -108,7 +109,7 @@ export function DataPanel({ onChange }: { onChange: () => void }) {
           </form>
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            {TYPE_ORDER.map(t => (
+            {typeOrder().map(t => (
               <label key={t} className="flex items-center gap-1.5 text-xs">
                 <Checkbox
                   checked={types.includes(t)}
@@ -119,7 +120,7 @@ export function DataPanel({ onChange }: { onChange: () => void }) {
                     })
                   }
                 />
-                {TYPE_LABEL[t]}
+                {typeLabel(t)}
               </label>
             ))}
             {busy ? <span className="text-xs text-muted-foreground">加载中…</span> : null}
@@ -128,11 +129,13 @@ export function DataPanel({ onChange }: { onChange: () => void }) {
 
         {msg && <p className="text-xs text-muted-foreground">{msg}</p>}
 
-        <Table containerClassName="scrollbar-thin rounded-lg border" className="min-w-[780px]">
+        <div className="hidden sm:block">
+        <Table containerClassName="scrollbar-thin rounded-lg border" className="min-w-[820px]">
           <TableHeader>
             <TableRow>
               <Th right className="w-16">ID</Th>
               <Th>名称</Th>
+              <Th className="w-24">来源</Th>
               <Th className="w-16">类型</Th>
               <Th right className="w-16">排名</Th>
               <Th right className="w-14">评分</Th>
@@ -150,7 +153,10 @@ export function DataPanel({ onChange }: { onChange: () => void }) {
                     {s.name_cn || s.name}
                   </span>
                 </Td>
-                <Td className="text-muted-foreground">{TYPE_LABEL[s.type] ?? s.type}</Td>
+                <Td>
+                  <span className="text-xs text-muted-foreground">{sourceLabel(s.source)}</span>
+                </Td>
+                <Td className="text-muted-foreground">{typeLabel(s.type, s.source)}</Td>
                 <Td className="num text-right">{s.rank || '—'}</Td>
                 <Td className="num text-right">{s.score || '—'}</Td>
                 <Td className="num text-right text-muted-foreground">{s.tags_total}</Td>
@@ -180,6 +186,43 @@ export function DataPanel({ onChange }: { onChange: () => void }) {
             ))}
           </TableBody>
         </Table>
+        </div>
+
+        {/* 窄屏卡片形态：同一份数据的另一种呈现，来源徽标同样可见 */}
+        <div className="space-y-2 sm:hidden">
+          {(data?.items ?? []).map(s => (
+            <div key={s.id} className="rounded-lg border p-3 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate font-medium" title={s.name_cn || s.name}>
+                  {s.name_cn || s.name}
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">{sourceLabel(s.source)}</span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                <span className="num">{s.id}</span>
+                <span>{typeLabel(s.type, s.source)}</span>
+                {s.rank > 0 && <span className="num">排名 {s.rank}</span>}
+                <span className="num">评分 {s.score || '—'}</span>
+                <span className="num">标签 {s.tags_total}</span>
+                <span>{fmtDateTime(s.fetched_at)}</span>
+              </div>
+              <div className="mt-2 flex justify-end gap-1">
+                <Button type="button" variant="ghost" size="xs" onClick={() => void refresh(s.id)}>
+                  刷新
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  aria-label={`删除条目 ${s.id}`}
+                  onClick={() => void remove(s.id)}
+                >
+                  <Trash2 size={13} aria-hidden />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
 
         {data && (
           <div className="flex flex-wrap items-center justify-between gap-2">

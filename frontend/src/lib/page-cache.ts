@@ -7,8 +7,23 @@ interface Entry {
   scrollTop: number
 }
 
-const MAX = 12
+// 上限是管理设置（page_cache_max，管理员改后经 setPageCacheMax 生效；0 = 关闭缓存）。
+let MAX = 12
 const store = new Map<string, Entry>()
+
+/** 调整返回缓存页数上限（管理设置加载/保存后调用；0 = 关闭并清空）。 */
+export function setPageCacheMax(max: number): void {
+  MAX = Math.max(0, Math.min(max, 50))
+  if (MAX === 0) {
+    store.clear()
+    return
+  }
+  while (store.size > MAX) {
+    const oldest = store.keys().next().value
+    if (oldest === undefined) break
+    store.delete(oldest)
+  }
+}
 
 export function savePage(key: string, data: unknown): void {
   if (!key || data == null) return

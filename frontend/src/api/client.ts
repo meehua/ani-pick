@@ -1,7 +1,7 @@
 import type {
   AdminOverview, AdminSettings, BgmCharacter, BgmEpisodeList, BgmPerson, BgmRelation,
-  BgmSubject, BgmUser, CrawlState, MetaResponse, MetricsSnapshot, NetworkStatus, SearchResult,
-  Subject, TagStat,
+  BgmSubject, BgmUser, CrawlState, ExtDetail, MetaResponse, MetricsSnapshot,
+  Run, SearchResult, Subject, TagStat,
 } from './types'
 import { endpointCandidates, getActiveId, imageBase, recordUsedEndpoint, type Endpoint } from '../net/endpoints'
 
@@ -77,6 +77,8 @@ export const img = (url?: string): string => {
 
 export interface SearchParams {
   keyword?: string
+  /** 数据来源筛选（bgm/tmdb/itunes/mal/anilist）；缺省 = 全部来源 */
+  source?: string
   types?: number[]
   tags?: string[]
   exclude?: string[]
@@ -117,6 +119,9 @@ export function searchSubjects(params: SearchParams, signal?: AbortSignal): Prom
 export const getMeta = () => apiGet<MetaResponse>('/api/meta')
 export const getSubjectIndex = (id: number, signal?: AbortSignal) =>
   apiGet<Subject>(`/api/subjects/${id}`, signal)
+// 扩展源详情代理：上游 key 与限速留在服务端，bgm 条目不走此端点
+export const getSubjectExtDetail = (id: number, signal?: AbortSignal) =>
+  apiGet<ExtDetail>(`/api/subjects/${id}/detail`, signal)
 export const getTags = (q: string, types: number[], limit = 30, signal?: AbortSignal) => {
   const p = new URLSearchParams({ q, limit: String(limit) })
   if (types.length) p.set('types', types.join(','))
@@ -136,24 +141,72 @@ export const adminLogout = () => apiSend<{ ok: boolean }>('/api/admin/logout', '
 export const adminSession = () => apiGet<{ authenticated: boolean }>('/api/admin/session')
 export const adminOverview = () => apiGet<AdminOverview>('/api/admin/overview')
 export const adminGetSettings = () => apiGet<AdminSettings>('/api/admin/settings')
-export const adminNetwork = () => apiGet<NetworkStatus>('/api/admin/network')
+
+export interface RunsPage {
+  items: Run[]
+  total: number
+  limit: number
+  offset: number
+}
+// 任务历史：筛选（来源/模式/状态）+ 排序（started_at|mode|source|status）+ 分页
+export const adminRuns = (params: {
+  source?: string
+  mode?: string
+  status?: string
+  sort?: string
+  order?: string
+  limit?: number
+  offset?: number
+}) => {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === '' || v === 0) continue
+    q.set(k, String(v))
+  }
+  return apiGet<RunsPage>(`/api/admin/runs?${q}`)
+}
 
 export interface SettingsPayload {
-  crawl: AdminSettings['crawl']
-  cache: AdminSettings['cache']
-  security: AdminSettings['security']
-  bgm: { token?: string; cookie?: string; clear_token?: boolean; clear_cookie?: boolean }
+  /** 不提交 = 保持现有（各面板只负责自己的块；凭据单独显式保存） */
+  crawl?: AdminSettings['crawl']
+  cache?: AdminSettings['cache']
+  security?: AdminSettings['security']
+  /** 服务器与面板运行参数（设置页可调） */
+  server?: AdminSettings['server']
+  /** 抓取出口网络（抓取设置 → 网络可调） */
+  network?: AdminSettings['network']
+  /** 数据源启用/顺序/评分权重（键=来源标识；清单之外的键后端拒绝） */
+  sources?: AdminSettings['sources']
+  /** 数据源凭据（只发送新填的值；空值/掩码回显 = 保持现有配置） */
+  credentials?: AdminSettings['credentials']
+  bgm?: { token?: string; cookie?: string; clear_token?: boolean; clear_cookie?: boolean }
 }
 
 export const adminSaveSettings = (payload: SettingsPayload) =>
   apiSend<{ ok: boolean; updated_at: string }>('/api/admin/settings', 'PUT', payload)
-export const adminTestCredential = () =>
-  apiSend<Record<string, unknown>>('/api/admin/credential/test', 'POST', {})
-export const adminStartCrawl = (mode: 'full' | 'incremental' | 'refresh') =>
-  apiSend<{ run_id: number; status: CrawlState }>('/api/admin/crawl', 'POST', { mode })
+// 按源校验凭据：扩展源带草稿值（还没保存也能试），不带 = 校验已存配置；
+// 不带 source = bgm（站长凭据，沿用旧行为）
+export const adminTestCredential = (source?: string, credentials?: Record<string, string>) =>
+  apiSend<{ ok: boolean; source?: string; mode?: string }>(
+    '/api/admin/credential/test', 'POST', { source, credentials },
+  )
+// 抓取模式（各源支持哪些模式由来源登记表声明，经 manifest 下发）
+export type CrawlMode = 'full' | 'incremental' | 'refresh' | 'harvest' | 'harvest_incremental'
+// source 传入时按单源抓取执行（模式须在该源声明的能力内），否则按合并模式跑全部来源
+export const adminStartCrawl = (
+  mode: CrawlMode,
+  source?: string,
+) => apiSend<{ run_id: number; status: CrawlState }>('/api/admin/crawl', 'POST', { mode, source })
 export const adminCancelCrawl = () => apiSend<{ ok: boolean }>('/api/admin/crawl/cancel', 'POST', {})
 export const adminRefreshSubject = (id: number) =>
   apiSend<Subject>(`/api/admin/subjects/${id}/refresh`, 'POST', {})
+// 重跑作品匹配：对仍自成作品的扩展源行重新归组（先补 anilist 的 mal_id 键）
+export const adminRematchWorks = () =>
+  apiSend<{ scanned: number; already_in: number; merged: number; independent: number; ambiguous: number; group_moves: number; samples?: string[] }>(
+    '/api/admin/works/rematch',
+    'POST',
+    {},
+  )
 export const adminDeleteSubject = (id: number) =>
   apiSend<{ ok: boolean }>(`/api/admin/subjects/${id}`, 'DELETE')
 export const adminChangePassword = (current: string, next: string) =>

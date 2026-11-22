@@ -1,14 +1,72 @@
 // 本站索引（AniPick 后端）与 Bangumi 直连 API 的类型。
+//
+// 来源与类型词表不在前端硬编码：后端来源登记表（internal/registry）经
+// /api/meta 的 sources 清单下发，消费入口见 api/vocab.ts（sourceLabel /
+// typeLabel / typeOrder / isExtSource / availableTypes 等）。
 
-export const TYPE_LABEL: Record<number, string> = {
-  1: '书籍',
-  2: '动画',
-  3: '音乐',
-  4: '游戏',
-  6: '三次元',
+/** 来源 manifest 里的一个类型词条（登记表词表的下发形态）。
+ *  label 是该源的原生标签（源资产，站点不改名）；kind 是站点级分类。 */
+export interface ManifestType {
+  code: number
+  label: string
+  /** 站点级分类（kind 层渲染与合并匹配用） */
+  kind?: string
 }
 
-export const TYPE_ORDER = [2, 1, 4, 3, 6]
+/** 站点级分类词表（双层词表的外层）：浏览 chips/首页类型卡按它渲染。 */
+export interface ManifestKind {
+  kind: string
+  label: string
+  /** 首页类型卡副文案 */
+  hint?: string
+}
+
+/** 来源支持的一个抓取模式（登记表能力清单的下发形态）。 */
+export interface ManifestMode {
+  mode: string
+  label: string
+  /** 按钮提示（副文案） */
+  hint?: string
+}
+
+/** 来源 manifest 里的一个凭据字段声明（设置页照单渲染）。 */
+export interface ManifestCred {
+  key: string
+  label: string
+  secret: boolean
+}
+
+/** 来源登记表的公开清单行：徽标文案/优先序/详情策略/配置状态/类型词汇/凭据声明。 */
+export interface ManifestSource {
+  id: string
+  label: string
+  /** 是否原生索引（浏览页 chips 常驻；无 source 字段的旧行归属） */
+  native: boolean
+  /** 有效优先级（越小越优先；管理设置可调） */
+  priority: number
+  /** 详情获取策略：proxy=服务端代理 | direct=浏览器直连 */
+  detail: 'proxy' | 'direct'
+  /** 配置状态（凭据是否已填写） */
+  configured: boolean
+  /** 登记表声明支持凭据校验（抓取设置页才渲染「校验凭据」按钮） */
+  validate?: boolean
+  /** 请求间隔默认值（ms，官方限速口径；间隔输入的 placeholder） */
+  interval_default?: number
+  /** 请求间隔硬下限（ms） */
+  interval_floor?: number
+  /** 收获预算声明（0 = 该源无此参数；源卡照单渲染预算输入） */
+  full_pages?: number
+  inc_pages?: number
+  page_size?: number
+  page_size_max?: number
+  tag_min_rank?: number
+  region?: string
+  types: ManifestType[]
+  /** 该源支持的抓取模式（抓取设置页按此渲染按钮组） */
+  modes?: ManifestMode[]
+  /** 需要在设置页填写的凭据字段 */
+  credentials?: ManifestCred[]
+}
 
 export interface TagVote {
   name: string
@@ -16,8 +74,27 @@ export interface TagVote {
   pct: number
 }
 
+/** 作品组内一个来源行（详情页多源评分对比/简介补缺用） */
+export interface SubjectSourceRow {
+  id: number
+  source: string
+  /** 该来源自己的原始评分（合成评分在主行上，单独展示） */
+  score: number
+  rating_total: number
+  /** 该来源官方站点的条目外链 */
+  url: string
+  /** 该行自己的标题/平台/日期/封面（区分同组多行，如剧场版与 TV 各一行） */
+  name?: string
+  name_cn?: string
+  platform?: string
+  date?: string
+  image?: string
+}
+
 export interface Subject {
   id: number
+  /** 数据来源（bgm/tmdb/itunes/mal/anilist）；缺省视为 bgm */
+  source: string
   type: number
   name: string
   name_cn: string
@@ -38,6 +115,8 @@ export interface Subject {
   locked: boolean
   fetched_at: string
   tags?: TagVote[]
+  /** 所在作品组内的全部来源行（仅详情响应有；单源作品只有自己） */
+  sources?: SubjectSourceRow[]
 }
 
 export interface SearchResult {
@@ -56,6 +135,8 @@ export interface TagStat {
 export interface Stats {
   total: number
   by_type: Record<string, number>
+  /** 按来源的条目计数（浏览页来源 chips 按此显隐） */
+  by_source?: Record<string, number>
   tags: number
   subject_tags: number
   last_fetched: string | null
@@ -65,6 +146,8 @@ export interface Stats {
 
 export interface CrawlProgress {
   phase: string
+  /** 当前阶段的数据来源（合并运行随阶段切换；单源抓取固定） */
+  source?: string
   type: number
   offset: number
   total: number
@@ -92,6 +175,8 @@ export interface CrawlState {
 export interface Run {
   id: number
   mode: string
+  /** 该行运行记录属于的数据源（合并运行里每个来源各占一行） */
+  source?: string
   trigger: string
   status: string
   types: number[]
@@ -101,18 +186,49 @@ export interface Run {
   finished_at: string | null
 }
 
+// 自动任务触发方式：interval 间隔分钟；daily 每天定时；every_days 每隔几天定时
+// （后两种在当天的 at_minute 分钟触发，服务器本地时间）
+export interface AutoSchedule {
+  kind: 'interval' | 'daily' | 'every_days'
+  every_min: number
+  at_minute: number
+  every_days: number
+}
+
 export interface CrawlSettings {
   types: number[]
   page_size: number
-  delay_ms: number
   request_timeout_sec: number
   refresh_ttl_days: number
   refresh_batch: number
   incremental_pages: number
+  /** 旧字段：增量间隔的镜像值（权威判定在 incremental_schedule） */
   incremental_interval_min: number
+  incremental_schedule: AutoSchedule
+  refresh_schedule: AutoSchedule
   auto_incremental: boolean
   auto_refresh: boolean
   prune_on_full: boolean
+  /** 任务稳健性（原为代码常量，现全部后台可调；缺省 = 默认推荐值） */
+  scheduler_tick_sec: number
+  page_fail_retries: number
+  page_retry_wait_sec: number
+  refresh_progress_every: number
+  scheduler_lookback: number
+  stale_retry_cap: number
+  source_gap_ms: number
+  ext_tag_max: number
+  /** 请求与重试（bgm 与扩展源通道同一口径） */
+  request_attempts: number
+  request_backoff_ms: number
+  retry_after_cap_sec: number
+  response_limit_mb: number
+  outbound_timeout_sec: number
+  /** 合并与配对 */
+  match_year_window: number
+  rematch_batch: number
+  /** 多对多类型匹配组（同组成员之间允许跨源配对；nil 后端落推荐默认） */
+  match_groups: TypeRef[][]
 }
 
 export interface CacheSettings {
@@ -122,6 +238,8 @@ export interface CacheSettings {
   meta_tags_ttl: number
   overview_ttl: number
   max_keys: number
+  /** 元标签候选缓存的键上限；0 = 默认 64 */
+  meta_tags_max_keys: number
 }
 
 // 限流与会话安全参数（管理后台「设置 → 限流与安全」可调）
@@ -134,12 +252,83 @@ export interface SecuritySettings {
   session_ttl_days: number
   limiter_max_ips: number
   max_page: number
+  /** 客户端真实 IP 请求头（如 CF-Connecting-IP）；空 = 用 TCP 对端 */
+  client_ip_header: string
+  /** 可信反代网段（逗号分隔 CIDR）；空 = 不读头 */
+  trusted_proxy_cidrs: string
+}
+
+/** 单个数据源的管理设置（「设置 → 数据源」可调） */
+export interface SourceSetting {
+  enabled: boolean
+  /** 资料优先序（越小越优先） */
+  priority: number
+  /** 评分权重（0-100，0 = 不参与合成评分） */
+  weight: number
+  /** 请求间隔（毫秒）；0 = 用登记表默认（每个源的最佳值） */
+  interval_ms: number
+  /** 保留期覆盖（天）；0 = 用全局默认（保留期策略每个源都适用） */
+  refresh_ttl_days: number
+  /** 收获预算覆写（0/空 = 登记表默认；单页条数上限按登记表硬顶钳） */
+  page_size: number
+  full_pages: number
+  inc_pages: number
+  tag_min_rank: number
+  region: string
+}
+
+/** 服务端抓取出口的运行配置（抓取设置 → 网络可调） */
+export interface NetworkSettings {
+  /** 抓取出站代理（http/https/socks5）；空 = 直连或 DoH */
+  egress_proxy: string
+  /** 出站走 DoH 解析（代理优先于 DoH） */
+  doh: boolean
+  /** TLS ECH（DoH 启用时生效） */
+  ech: boolean
+  /** DoH 入口清单；空 = 内置默认 */
+  doh_endpoints: string[]
+  /** DoH 解析超时（秒）；默认 6 */
+  doh_timeout_sec: number
+  /** DNS 结果最短缓存（秒）；默认 60 */
+  dns_cache_min_sec: number
+  /** DNS 结果默认缓存（秒）；默认 300 */
+  dns_cache_ttl_sec: number
+  /** 扩展源出站 User-Agent；空 = 内置默认 */
+  outbound_ua: string
+}
+
+/** 匹配组成员：一个来源的一个类型 */
+export interface TypeRef {
+  source: string
+  type: number
+}
+
+/** 服务器运行参数（管理后台「设置 → 服务器与面板」可调） */
+export interface ServerSettings {
+  session_cache_ttl_sec: number
+  session_seen_gap_sec: number
+  session_cache_max: number
+  min_compress_bytes: number
+  snapshot_ttl_sec: number
+  perf_sample_cap: number
+  recent_req_cap: number
+  overview_runs: number
+  shutdown_wait_sec: number
+  admin_poll_sec: number
+  page_cache_max: number
 }
 
 export interface AdminSettings {
   crawl: CrawlSettings
   cache: CacheSettings
   security: SecuritySettings
+  network: NetworkSettings
+  /** 服务器与面板运行参数 */
+  server: ServerSettings
+  /** 数据源启用/顺序/评分权重（键=来源标识） */
+  sources: Record<string, SourceSetting>
+  /** 数据源凭据（键=来源标识→字段键；回显为掩码） */
+  credentials: Record<string, Record<string, string>>
   bgm: {
     token: string
     cookie: string
@@ -150,11 +339,28 @@ export interface AdminSettings {
   updated_at: string
 }
 
+/** 扩展源适配器的配置状态（管理面板「抓取」按源展示） */
+export interface HarvesterInfo {
+  source: string
+  label: string
+  types: number[]
+  configured: boolean
+  /** 设置里是否启用 */
+  enabled?: boolean
+  /** 有效优先级（越小越优先） */
+  priority?: number
+  /** 该源超过自己有效保留期的条目数（新鲜度状态，主行可见） */
+  stale?: number
+}
+
 export interface AdminOverview {
   stats: Stats
   crawler: CrawlState
   runs: Run[]
   stale: number
+  harvesters?: HarvesterInfo[]
+  /** 最近一次覆盖全部启用中来源的合并运行开始时间（ISO；从未跑过为空） */
+  last_all_sources?: string | null
   settings: {
     crawl: CrawlSettings
     bgm: { token_configured: boolean; cookie_configured: boolean }
@@ -170,22 +376,12 @@ export interface MetaResponse {
   build?: string
   stats: Stats
   crawler: CrawlState
-}
-
-// 服务端抓取出口的诊断信息（仅管理员可见）。
-export interface NetworkStatus {
-  doh: boolean
-  proxy: boolean
-  upstream_ok?: boolean
-  upstream_status?: number
-  upstream_error?: string
-  diagnostics?: {
-    host: string
-    doh_enabled: boolean
-    endpoints: string[]
-    addresses: string[]
-    error?: string
-  }
+  /** 来源登记表公开清单（词表/徽标/详情分派/筛选 chips 的唯一来源） */
+  sources?: ManifestSource[]
+  /** 站点级分类词表（双层词表的外层；浏览 chips/首页类型卡按它渲染） */
+  kinds?: ManifestKind[]
+  /** 首页快捷入口（登记表 QuickLinks 下发；To 里 {year} = 去年年份） */
+  quick_links?: { label: string; to: string }[]
 }
 
 // ---------- 管理端性能监测 ----------
@@ -339,4 +535,33 @@ export interface BgmUser {
   username: string
   nickname: string
   avatar?: { large?: string; medium?: string; small?: string }
+}
+
+// ---------- 扩展源详情代理（/api/subjects/{id}/detail） ----------
+
+export interface ExtFact {
+  k: string
+  v: string
+}
+
+/** 服务端归一化后的扩展源详情；上游没有的字段留空，前端沿用缺省退化逻辑 */
+export interface ExtDetail {
+  source: string
+  source_ref: string
+  title: string
+  title_cn?: string
+  platform?: string
+  date?: string
+  end_date?: string
+  image?: string
+  backdrop?: string
+  summary?: string
+  /** 已归一到 10 分制 */
+  score?: number
+  score_count?: number
+  episodes?: number
+  runtime?: number
+  tags?: string[]
+  facts?: ExtFact[]
+  link?: string
 }

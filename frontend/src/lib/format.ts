@@ -50,10 +50,14 @@ export function yearOf(date?: string): string {
   return date && date.length >= 4 ? date.slice(0, 4) : '—'
 }
 
+// 抓取模式的展示名：词表正源在来源登记表（internal/registry.ModeLabels），
+// 经 manifest 下发到前端 vocab.modeLabel；这里是词表未到达时的兜底。
 export const MODE_LABEL: Record<string, string> = {
   full: '全量抓取',
   incremental: '增量抓取',
   refresh: '过期重爬',
+  harvest: '抓取',
+  harvest_incremental: '增量抓取',
 }
 
 export const STATUS_LABEL: Record<string, string> = {
@@ -62,4 +66,5 @@ export const STATUS_LABEL: Record<string, string> = {
   failed: '失败',
   canceled: '已取消',
   interrupted: '已中断',
+  skipped: '已跳过',
 }
