@@ -102,6 +102,9 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		if err != nil {
 			return err
 		}
+		// 开始也要打日志：大库上单条迁移动辄几分钟到十几分钟，
+		// 只在完成时打日志会全程静默，看起来像卡死
+		slog.Info("数据库迁移开始", "file", entry.Name())
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			return err

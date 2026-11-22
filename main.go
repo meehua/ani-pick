@@ -42,7 +42,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Open(ctx, cfg.DatabaseURL, db.PoolConfig{
+	// 启动序列（连库/迁移/初始化）用独立 context：迁移动辄十几分钟，
+	// 不随停止信号取消——收到 SIGTERM 也先把迁移跑完（事务保证不脏），
+	// ctx 届时已取消，启动完成即优雅关停；部署方超时强杀兜底。
+	bootCtx := context.Background()
+
+	pool, err := db.Open(bootCtx, cfg.DatabaseURL, db.PoolConfig{
 		MaxConns:          int32(cfg.DbMaxConns),
 		MinConns:          int32(cfg.DbMinConns),
 		ConnLifetime:      cfg.DbConnLifetime,
@@ -55,7 +60,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	if err := db.Migrate(ctx, pool); err != nil {
+	if err := db.Migrate(bootCtx, pool); err != nil {
 		slog.Error("数据库迁移失败", "err", err)
 		os.Exit(1)
 	}
@@ -70,14 +75,14 @@ func main() {
 	}
 
 	st := store.New(pool, box)
-	if err := st.EnsureAdminPassword(ctx, cfg.AdminPassword); err != nil {
+	if err := st.EnsureAdminPassword(bootCtx, cfg.AdminPassword); err != nil {
 		slog.Error("初始化管理员密码失败", "err", err)
 		os.Exit(1)
 	}
-	if err := st.MarkStaleRuns(ctx); err != nil {
+	if err := st.MarkStaleRuns(bootCtx); err != nil {
 		slog.Warn("清理中断任务失败", "err", err)
 	}
-	_ = st.CleanupSessions(ctx)
+	_ = st.CleanupSessions(bootCtx)
 
 	defaults := store.AppSettings{
 		// 抓取配置种子（首次启动写入数据库；运行期一律在管理后台「抓取设置」
