@@ -86,13 +86,8 @@ type Harvester interface {
 	// HarvestIncremental 增量收获：只取发现列表头部若干页。
 	HarvestIncremental(sc *Scope) error
 	// FetchRecord 取上游单条记录并归一化为索引行（管理端单条刷新用）。
+	// 简介随载荷入库（subjects.summary）——详情页只读本站索引，不回上游。
 	FetchRecord(ctx context.Context, ref string) (store.Subject, error)
-}
-
-// Detailer 是详情代理：按 source_ref 取上游详情并归一化。
-// 所有 Harvester 同时实现 Detailer（服务端按来源分派）。
-type Detailer interface {
-	Detail(ctx context.Context, ref string) (*Detail, error)
 }
 
 // CredentialValidator 是凭据校验器：用给定（草稿或已存）凭据向上游发一次
@@ -100,34 +95,6 @@ type Detailer interface {
 // 服务端按此渲染校验按钮与分派校验端点。
 type CredentialValidator interface {
 	ValidateCredentials(ctx context.Context, creds map[string]string) error
-}
-
-// Fact 是详情页信息栏的一行（k=名称，v=值）。
-type Fact struct {
-	K string `json:"k"`
-	V string `json:"v"`
-}
-
-// Detail 是归一化后的条目详情（服务端代理端点 /api/subjects/{id}/detail 的响应体）。
-// 字段是各源共有的超集；上游没有的部分留空，前端沿用缺省退化逻辑。
-type Detail struct {
-	Source     string   `json:"source"`
-	SourceRef  string   `json:"source_ref"`
-	Title      string   `json:"title"`
-	TitleCN    string   `json:"title_cn,omitempty"`
-	Platform   string   `json:"platform,omitempty"`
-	Date       string   `json:"date,omitempty"`
-	EndDate    string   `json:"end_date,omitempty"`
-	Image      string   `json:"image,omitempty"`
-	Backdrop   string   `json:"backdrop,omitempty"`
-	Summary    string   `json:"summary,omitempty"`
-	Score      float64  `json:"score,omitempty"`       // 已归一到 10 分制
-	ScoreCount int      `json:"score_count,omitempty"` // 评分人数
-	Episodes   int      `json:"episodes,omitempty"`
-	Runtime    int      `json:"runtime,omitempty"` // 分钟（电影为片长，剧集为单集）
-	Tags       []string `json:"tags,omitempty"`
-	Facts      []Fact   `json:"facts,omitempty"`
-	Link       string   `json:"link,omitempty"`
 }
 
 // truncateTags 去空、去重并截断标签（扩展源 votes/pct 恒为 0，只保留名字）。

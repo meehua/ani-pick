@@ -1,7 +1,7 @@
 // 词表（后端 internal/registry）经 /api/meta 下发的 manifest 在前端的
 // 唯一消费入口。双层词表：源原生层（各源自己的类型标签，站点不改名）与
 // 站点分类层（kind：浏览筛选/首页类型卡）。来源徽标文案、抓取能力、展示顺序、
-// 详情分派策略全部由 manifest 驱动——这里不自带任何硬编码词表；
+// 词表与来源语义全部由 manifest 驱动——这里不自带任何硬编码词表；
 // manifest 未到达时按旧约定退化。
 
 import type { ManifestKind, ManifestSource } from './types'
@@ -69,20 +69,13 @@ export function sourceLabel(id?: string): string {
   return s?.label ?? (id ?? '')
 }
 
-/** 详情获取策略：登记表声明 proxy=服务端代理 / direct=浏览器直连。
- *  无 source 字段的旧行视为原生（直连）；manifest 未到达的瞬态里按
- *  旧约定退化——原生索引标识直连，其余来源按扩展源处理。 */
-function sourceDetail(id?: string): 'proxy' | 'direct' {
-  if (manifest.length === 0) {
-    return !id || id === 'bgm' ? 'direct' : 'proxy'
-  }
-  const s = id ? byId.get(id) : nativeSource()
-  return s?.detail ?? 'direct'
-}
-
-/** 是否扩展源（详情走服务端代理、外链与评分行分派）。 */
+/** 是否扩展源（详情数据只读本站索引；bgm 行的动态信息栏走浏览器直连 bgm API，
+ *  不经过本站接口——本站接口只响应自己的库）。无 source 字段的旧行视为原生。 */
 export function isExtSource(id?: string): boolean {
-  return sourceDetail(id) === 'proxy'
+  if (manifest.length === 0) {
+    return !!id && id !== 'bgm'
+  }
+  return !!id && id !== nativeSource()?.id
 }
 
 // ---------- 源原生层（各源自己的类型标签，永不改名） ----------

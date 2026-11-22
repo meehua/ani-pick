@@ -211,6 +211,7 @@ func (a *AniList) convert(m anilistMedia, minRank int) store.Subject {
 		Collect:     m.Popularity,
 		NSFW:        false, // 发现查询已过滤 isAdult
 		Image:       m.CoverImage.ExtraLarge,
+		Summary:     StripText(m.Description),
 		MetaTags:    []string{},
 		TagsTotal:   0,
 		Tags:        truncateTags(m.tagNames(minRank)),
@@ -354,15 +355,6 @@ func (a *AniList) FetchRecord(ctx context.Context, ref string) (store.Subject, e
 	return a.convert(m, effectiveParams(anilistSpec).TagMinRank), nil
 }
 
-// Detail 取 AniList 归一化详情。
-func (a *AniList) Detail(ctx context.Context, ref string) (*Detail, error) {
-	m, err := a.media(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
-	return a.detailOf(m), nil
-}
-
 // media 按 ref（数字 AniList id）取单条媒体。
 func (a *AniList) media(ctx context.Context, ref string) (anilistMedia, error) {
 	id, err := strconv.Atoi(strings.TrimSpace(ref))
@@ -387,90 +379,6 @@ func (a *AniList) media(ctx context.Context, ref string) (anilistMedia, error) {
 		return anilistMedia{}, ErrNotFound
 	}
 	return out.Data.Media, nil
-}
-
-func (a *AniList) detailOf(m anilistMedia) *Detail {
-	name := m.Title.English
-	if name == "" {
-		name = m.Title.Romaji
-	}
-	var score float64
-	if m.MeanScore > 0 {
-		score = float64(m.MeanScore) / 10
-	}
-
-	facts := make([]Fact, 0, 8)
-	if m.Title.Native != "" {
-		facts = append(facts, Fact{K: "原名", V: m.Title.Native})
-	}
-	if m.Title.Romaji != "" && m.Title.Romaji != name {
-		facts = append(facts, Fact{K: "罗马字", V: m.Title.Romaji})
-	}
-	if m.Format != "" {
-		facts = append(facts, Fact{K: "格式", V: m.Format})
-	}
-	if m.Status != "" {
-		facts = append(facts, Fact{K: "状态", V: anilistStatusCN(m.Status)})
-	}
-	if m.Episodes > 0 {
-		facts = append(facts, Fact{K: "集数", V: strconv.Itoa(m.Episodes)})
-	}
-	if m.Duration > 0 {
-		facts = append(facts, Fact{K: "单集片长", V: strconv.Itoa(m.Duration) + " 分钟"})
-	}
-	if len(m.Studios.Nodes) > 0 {
-		var names []string
-		for _, s := range m.Studios.Nodes {
-			names = append(names, s.Name)
-		}
-		facts = append(facts, Fact{K: "制作", V: strings.Join(names, " / ")})
-	}
-	if m.Popularity > 0 {
-		facts = append(facts, Fact{K: "人气", V: humanize(m.Popularity) + " 人看过"})
-	}
-	if m.Favourites > 0 {
-		facts = append(facts, Fact{K: "收藏", V: humanize(m.Favourites)})
-	}
-	if m.Country != "" {
-		facts = append(facts, Fact{K: "制片国家", V: m.Country})
-	}
-
-	tags := m.tagNames(effectiveParams(anilistSpec).TagMinRank)
-	return &Detail{
-		Source:     anilistSpec.ID,
-		SourceRef:  strconv.Itoa(m.ID),
-		Title:      name,
-		Platform:   registry.AnimePlatform(m.Format),
-		Date:       anilistDate(m.StartDate),
-		EndDate:    anilistDate(m.EndDate),
-		Image:      m.CoverImage.ExtraLarge,
-		Backdrop:   m.BannerImage,
-		Summary:    StripText(m.Description),
-		Score:      score,
-		ScoreCount: m.ratedCount(),
-		Episodes:   m.Episodes,
-		Runtime:    m.Duration,
-		Tags:       tags,
-		Facts:      facts,
-		Link:       m.SiteURL,
-	}
-}
-
-// anilistStatusCN 状态枚举翻译（未知原样保留）。
-func anilistStatusCN(s string) string {
-	switch s {
-	case "FINISHED":
-		return "已完结"
-	case "RELEASING":
-		return "连载中"
-	case "NOT_YET_RELEASED":
-		return "未播出"
-	case "CANCELLED":
-		return "已取消"
-	case "HIATUS":
-		return "休刊中"
-	}
-	return s
 }
 
 // AniListRecord 是一次存量回填的完整载荷：确定性键 + 全部标题变体

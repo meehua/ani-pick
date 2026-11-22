@@ -103,16 +103,6 @@ var QuickLinks = []QuickLink{
 	{Label: "科幻", To: "/browse?tags=科幻"},
 }
 
-// DetailPolicy 是条目详情的获取策略。
-type DetailPolicy string
-
-const (
-	// DetailProxy 详情走服务端代理（/api/subjects/{id}/detail），上游凭据留在服务端。
-	DetailProxy DetailPolicy = "proxy"
-	// DetailDirect 详情由浏览器直连上游（原生索引）。
-	DetailDirect DetailPolicy = "direct"
-)
-
 // 数据源标识（subjects.source）。bgm 为原生 Bangumi 索引；其余为扩展源，
 // 上游记录以 (source, source_ref) 唯一定位，公开 id 由 subject_ext_id_seq 分配。
 const (
@@ -168,7 +158,6 @@ type Source struct {
 	Priority    int            // 资料优先序（越小越优先；管理设置可调）
 	Weight      int            // 默认评分权重（0-100，0 = 该源评分不参与合成）
 	URLTemplate string         // 条目外链模板，{ref} 为 source_ref 占位
-	Detail      DetailPolicy   // 详情获取策略
 	Types       map[int]string // 该源产出的类型编码 → 原生标签（源资产，永不改名）
 	Kinds       map[int]Kind   // 类型编码 → 站点级分类（未声明 = 未分类）
 	ScoreScale  float64        // 上游评分满分：换算 10 分制 = 原始分 × 10 ÷ 满分；0 = 源无评分
@@ -221,7 +210,6 @@ var sources = []Source{
 		Priority:    10,
 		Weight:      100,
 		URLTemplate: "https://bgm.tv/subject/{ref}",
-		Detail:      DetailDirect,
 		Types: map[int]string{
 			TypeBook:  "书籍",
 			TypeAnime: "动画",
@@ -251,7 +239,6 @@ var sources = []Source{
 		Priority:    20,
 		Weight:      100,
 		URLTemplate: "https://anilist.co/anime/{ref}",
-		Detail:      DetailProxy,
 		Types:       map[int]string{TypeAnime: "动画"},
 		Kinds:       map[int]Kind{TypeAnime: KindAnime},
 		ScoreScale:  100, // meanScore 是百分制
@@ -266,7 +253,6 @@ var sources = []Source{
 		Priority:    30,
 		Weight:      100,
 		URLTemplate: "https://myanimelist.net/anime/{ref}",
-		Detail:      DetailProxy,
 		Types:       map[int]string{TypeAnime: "动画"},
 		Kinds:       map[int]Kind{TypeAnime: KindAnime},
 		ScoreScale:  10,
@@ -288,7 +274,6 @@ var sources = []Source{
 		Weight:   100,
 		// TMDB 的 source_ref 自带类别段（"movie/500"、"tv/1234"），直接拼进模板。
 		URLTemplate: "https://www.themoviedb.org/{ref}?language=zh-CN",
-		Detail:      DetailProxy,
 		Types: map[int]string{
 			TypeMovie:    "电影",
 			TypeTVSeries: "剧集",
@@ -315,7 +300,6 @@ var sources = []Source{
 		Native:      false,
 		Priority:    50,
 		URLTemplate: "https://itunes.apple.com/tw/movie/id{ref}",
-		Detail:      DetailProxy,
 		Types:       map[int]string{TypeMovie: "电影"},
 		Kinds:       map[int]Kind{TypeMovie: KindMovie},
 		ScoreScale:  0, // 实测 RSS/lookup 均无评分字段

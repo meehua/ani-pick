@@ -153,6 +153,7 @@ func (m *MAL) convert(n malNode) store.Subject {
 		RatingTotal: n.NumScoringUsers,
 		NSFW:        nsfw,
 		Image:       n.MainPicture.Large,
+		Summary:     StripText(n.Synopsis),
 		MetaTags:    []string{},
 		TagsTotal:   0,
 		Tags:        truncateTags(genreNames(n.Genres)),
@@ -234,90 +235,25 @@ func (m *MAL) harvest(sc *Scope, rankingType string, pages int) error {
 
 // FetchRecord 取上游单条记录（/anime/{id} 带字段清单）并归一化为索引行。
 func (m *MAL) FetchRecord(ctx context.Context, ref string) (store.Subject, error) {
-	n, _, err := m.fetchRecord(ctx, ref)
+	n, err := m.fetchRecord(ctx, ref)
 	if err != nil {
 		return store.Subject{}, err
 	}
 	return m.convert(n), nil
 }
 
-// Detail 取 MAL 归一化详情（/anime/{id} 带字段清单）。
-func (m *MAL) Detail(ctx context.Context, ref string) (*Detail, error) {
-	n, _, err := m.fetchRecord(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
-	return m.detailOf(n), nil
-}
-
-// fetchRecord 一次上游请求产出原始结构；ref 必须是数字 MAL id。
-func (m *MAL) fetchRecord(ctx context.Context, ref string) (malNode, *Detail, error) {
+// fetchRecord 取上游单条记录；ref 必须是数字 MAL id。
+func (m *MAL) fetchRecord(ctx context.Context, ref string) (malNode, error) {
 	id, err := strconv.Atoi(strings.TrimSpace(ref))
 	if err != nil || id <= 0 {
-		return malNode{}, nil, fmt.Errorf("非法 MAL id %q", ref)
+		return malNode{}, fmt.Errorf("非法 MAL id %q", ref)
 	}
 	if !m.Configured() {
-		return malNode{}, nil, ErrNotConfigured
+		return malNode{}, ErrNotConfigured
 	}
 	var node malNode
 	if err := m.f.getJSONHeaders(ctx, fmt.Sprintf("%s/anime/%d?fields=%s", m.baseURL, id, malFields), &node, m.authHeaders()); err != nil {
-		return malNode{}, nil, err
+		return malNode{}, err
 	}
-	return node, nil, nil
-}
-
-func (m *MAL) detailOf(n malNode) *Detail {
-	facts := make([]Fact, 0, 8)
-	if n.AlternativeTitles.JA != "" {
-		facts = append(facts, Fact{K: "日文名", V: n.AlternativeTitles.JA})
-	}
-	if n.AlternativeTitles.EN != "" && n.AlternativeTitles.EN != n.Title {
-		facts = append(facts, Fact{K: "英文名", V: n.AlternativeTitles.EN})
-	}
-	if n.MediaType != "" {
-		facts = append(facts, Fact{K: "类型", V: registry.AnimePlatform(n.MediaType)})
-	}
-	if len(n.Studios) > 0 {
-		var names []string
-		for _, s := range n.Studios {
-			names = append(names, s.Name)
-		}
-		facts = append(facts, Fact{K: "制作", V: strings.Join(names, " / ")})
-	}
-	if n.Mean > 0 {
-		facts = append(facts, Fact{K: "MAL 评分", V: fmt.Sprintf("%.2f（%s 人评分）", n.Mean, humanize(n.NumScoringUsers))})
-	}
-	if n.Rank > 0 {
-		facts = append(facts, Fact{K: "MAL 排名", V: "#" + strconv.Itoa(n.Rank)})
-	}
-	if n.Popularity > 0 {
-		facts = append(facts, Fact{K: "人气", V: "#" + strconv.Itoa(n.Popularity)})
-	}
-	if n.NumEpisodes > 0 {
-		facts = append(facts, Fact{K: "集数", V: strconv.Itoa(n.NumEpisodes)})
-	}
-	if n.AvgEpisodeDur > 0 {
-		facts = append(facts, Fact{K: "单集片长", V: strconv.Itoa(n.AvgEpisodeDur/60) + " 分钟"})
-	}
-	if len(n.Genres) > 0 {
-		facts = append(facts, Fact{K: "类型", V: strings.Join(genreNames(n.Genres), " / ")})
-	}
-
-	return &Detail{
-		Source:     malSpec.ID,
-		SourceRef:  strconv.Itoa(n.ID),
-		Title:      n.Title,
-		Platform:   registry.AnimePlatform(n.MediaType),
-		Date:       NormalizeDate(n.StartDate),
-		EndDate:    NormalizeDate(n.EndDate),
-		Image:      n.MainPicture.Large,
-		Summary:    StripText(n.Synopsis),
-		Score:      registry.ScoreOf(malSpec.ID, n.Mean),
-		ScoreCount: n.NumScoringUsers,
-		Episodes:   n.NumEpisodes,
-		Runtime:    n.AvgEpisodeDur / 60,
-		Tags:       genreNames(n.Genres),
-		Facts:      facts,
-		Link:       registry.SubjectURL(malSpec.ID, strconv.Itoa(n.ID)),
-	}
+	return node, nil
 }

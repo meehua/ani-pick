@@ -138,6 +138,7 @@ type Subject struct {
 	Platform      string     `json:"platform"`
 	Image         string     `json:"image"`
 	Images        ImageSet   `json:"images"`
+	Summary       string     `json:"summary"`
 	NSFW          bool       `json:"nsfw"`
 	Locked        bool       `json:"locked"`
 	MetaTags      []string   `json:"meta_tags"`

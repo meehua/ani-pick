@@ -86,7 +86,6 @@ type CacheSettings struct {
 	MetaTTL         *int `json:"meta_ttl"`           // /api/meta 首页元信息缓存 TTL（秒）
 	MetaTagsTTL     *int `json:"meta_tags_ttl"`      // /api/meta-tags 元标签候选缓存 TTL（秒）
 	OverviewTTL     *int `json:"overview_ttl"`       // /api/admin/overview 聚合缓存 TTL（秒）
-	ExtDetailTTL    *int `json:"ext_detail_ttl"`     // /api/subjects/{id}/detail 扩展源代理详情缓存 TTL（秒）
 	MaxKeys         int  `json:"max_keys"`           // 搜索页/标签候选/详情/搜索总数缓存的键上限（内存有界）
 	MetaTagsMaxKeys int  `json:"meta_tags_max_keys"` // 元标签候选缓存的键上限（内存有界），0 = 默认
 }
@@ -345,9 +344,6 @@ func (s *AppSettings) Normalize() {
 	normTTL(&s.Cache.MetaTTL, 30, 5)
 	normTTL(&s.Cache.MetaTagsTTL, 600, 10)
 	normTTL(&s.Cache.OverviewTTL, 3, 1)
-	// 扩展源详情回源要请求上游（秒级延迟），默认缓存 10 分钟——评分/标题变化
-	// 慢，且管理端刷新/抓取收尾会主动失效；下限与详情缓存一致 5s
-	normTTL(&s.Cache.ExtDetailTTL, 600, 5)
 	if s.Cache.MaxKeys <= 0 {
 		s.Cache.MaxKeys = 256
 	}

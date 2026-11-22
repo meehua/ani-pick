@@ -3,9 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -18,9 +16,6 @@ import (
 	"anipick/internal/sources"
 	"anipick/internal/store"
 )
-
-// errDirectOnly 标记请求的是详情策略为「浏览器直连」的来源（不经服务端代理）。
-var errDirectOnly = errors.New("该来源详情由浏览器直连获取")
 
 func parseIntParam(r *http.Request, key string, def int) int {
 	v := strings.TrimSpace(r.URL.Query().Get(key))
@@ -246,11 +241,14 @@ type subjectSourceRow struct {
 	Platform    string  `json:"platform,omitempty"`
 	Date        string  `json:"date,omitempty"`
 	Image       string  `json:"image,omitempty"`
+	Summary     string  `json:"summary,omitempty"`
 }
 
 // subjectIndexResponse 是 /api/subjects/{id} 的响应：索引行 + 作品组的来源清单。
 type subjectIndexResponse struct {
 	store.Subject
+	// URL 是主行在各源官方站点的条目外链（登记表模板按内部引用拼出，内部字段不出服务）。
+	URL     string             `json:"url,omitempty"`
 	Sources []subjectSourceRow `json:"sources"`
 }
 
@@ -269,6 +267,7 @@ func toSourceRows(group []store.GroupSource) []subjectSourceRow {
 			Platform:    g.Platform,
 			Date:        g.Date,
 			Image:       g.Image,
+			Summary:     g.Summary,
 		})
 	}
 	return rows
@@ -308,7 +307,8 @@ func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(subjectIndexResponse{Subject: sub, Sources: toSourceRows(group)})
+		return json.Marshal(subjectIndexResponse{Subject: sub, Sources: toSourceRows(group),
+			URL: sources.SubjectURL(sub.Source, sub.SourceRef)})
 	})
 	if merged {
 		s.m.cacheEvent("detail", "merged")
@@ -324,100 +324,6 @@ func (s *Server) handleSubjectIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if snap.queryTTL > 0 {
-		s.detailMu.Lock()
-		if len(s.detailCache) >= snap.maxKeys {
-			s.detailCache = map[string]cachedJSON{} // id 空间无界，超限整体换新
-		}
-		s.detailCache[key] = cachedJSON{at: time.Now(), body: body}
-		s.detailMu.Unlock()
-	}
-	writeJSONTTL(w, http.StatusOK, body, snap.publicTTL)
-}
-
-// handleSubjectExtDetail 是扩展源（tmdb/itunes/mal/anilist）的详情代理端点。
-// 上游 API key（TMDB）与共享出口限速都留在服务端；bgm 详情由浏览器直连，不经此端点。
-// 结果缓存复用 detailCache（键加 ext: 前缀），失效与索引详情一致：
-// 抓取收尾全量清空、管理端刷新/删除按 id 失效（invalidateSubject）。
-func (s *Server) handleSubjectExtDetail(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		badRequest(w, "无效的条目 ID")
-		return
-	}
-	snap := s.snapshot(r.Context())
-	key := "ext:" + strconv.FormatInt(id, 10)
-	// 扩展源详情独立 TTL（默认 600s）：回源要等上游响应（秒级），评分/标题
-	// 变化慢，不该按搜索查询的 60s 节奏重付上游延迟；管理端刷新/删除按 id 失效
-	if snap.extDetailTTL > 0 { // 0 = 关闭详情缓存：每次都回源
-		s.detailMu.Lock()
-		if e, ok := s.detailCache[key]; ok && time.Since(e.at) < snap.extDetailTTL {
-			body := e.body
-			s.detailMu.Unlock()
-			s.m.cacheEvent("ext-detail", "hit")
-			writeJSONTTL(w, http.StatusOK, body, snap.publicTTL)
-			return
-		}
-		s.detailMu.Unlock()
-	}
-
-	body, err, merged := s.flights.do("extdetail:"+key, func() ([]byte, error) {
-		// 先读索引行确定来源与 source_ref（脱离请求的后台 ctx，超时显式给足）
-		tr := db.TraceFrom(r.Context())
-		ctx, cancel := context.WithTimeout(db.ContextWithTrace(context.Background(), tr), 10*time.Second)
-		defer cancel()
-		sub, err := s.store.GetSubject(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if sub.Source == "" {
-			return nil, errDirectOnly
-		}
-		// 详情获取策略由来源登记表声明：直连来源（原生索引）不经服务端代理
-		if src, ok := registry.Get(sub.Source); !ok || src.Detail != registry.DetailProxy {
-			return nil, errDirectOnly
-		}
-		detailer, ok := s.detailers[sub.Source]
-		if !ok {
-			return nil, fmt.Errorf("未知数据源 %q", sub.Source)
-		}
-		// 上游请求显式超时：长动作不继承默认超时
-		uctx, ucancel := context.WithTimeout(db.ContextWithTrace(context.Background(), tr), 20*time.Second)
-		defer ucancel()
-		d, err := detailer.Detail(uctx, sub.SourceRef)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(d)
-	})
-	if merged {
-		s.m.cacheEvent("ext-detail", "merged")
-	} else {
-		s.m.cacheEvent("ext-detail", "origin")
-	}
-	switch {
-	case err == nil:
-	case errors.Is(err, errDirectOnly):
-		fail(w, http.StatusBadRequest, "bgm_direct_only",
-			"该来源条目详情由浏览器直连获取，不经服务端代理", "前端详情页会按条目来源自动分派")
-		return
-	case errors.Is(err, sources.ErrNotConfigured):
-		fail(w, http.StatusServiceUnavailable, "source_not_configured",
-			"该数据源未配置，无法获取详情", "在管理后台「设置 → 数据源」填写对应凭据后重试")
-		return
-	case errors.Is(err, sources.ErrNotFound):
-		fail(w, http.StatusBadGateway, "upstream_not_found",
-			"上游已不存在这条记录", "")
-		return
-	case err == store.ErrNotFound:
-		fail(w, http.StatusNotFound, "not_indexed", "本站索引中没有这个条目", "")
-		return
-	default:
-		slog.Error("扩展源详情代理失败", "err", err)
-		fail(w, http.StatusBadGateway, "upstream_error",
-			"上游详情获取失败", "稍后重试；详情结果已缓存，命中后不再回源")
-		return
-	}
-	if snap.extDetailTTL > 0 {
 		s.detailMu.Lock()
 		if len(s.detailCache) >= snap.maxKeys {
 			s.detailCache = map[string]cachedJSON{} // id 空间无界，超限整体换新
@@ -569,7 +475,6 @@ type manifestSource struct {
 	Label           string `json:"label"`
 	Native          bool   `json:"native"`
 	Priority        int    `json:"priority"`
-	Detail          string `json:"detail"` // proxy=服务端代理 | direct=浏览器直连
 	Configured      bool   `json:"configured"`
 	Validate        bool   `json:"validate"`                 // 登记表声明支持凭据校验（前端才渲染校验按钮）
 	IntervalDefault int    `json:"interval_default"`         // 请求间隔默认值（ms，官方限速口径）
@@ -626,7 +531,6 @@ func (s *Server) sourceManifest(snap cfgSnapshot) []manifestSource {
 			Label:    src.Label,
 			Native:   src.Native,
 			Priority: store.SourcePriority(src.ID, snap.sources),
-			Detail:   string(src.Detail),
 			Validate: src.Validate,
 			// 每源请求间隔的默认与下限（登记表按官方限速口径声明），
 			// 展开区的间隔输入用默认值做 placeholder、下限做提示。

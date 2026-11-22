@@ -115,28 +115,11 @@ func TestITunesLookupDetail(t *testing.T) {
 		t.Fatal("輔12級不应判敏感")
 	}
 
-	d, err := i.Detail(context.Background(), "6822007631")
-	if err != nil {
-		t.Fatal(err)
+	// 简介随抓取入库（详情只读库）；外链由登记表模板拼，不入库
+	if rec.Summary != "剧情描述" {
+		t.Fatalf("简介异常: %q", rec.Summary)
 	}
-	if d.Title != "奧德賽" || d.Summary != "剧情描述" || d.Runtime != 172 {
-		t.Fatalf("详情异常: %+v", d)
-	}
-	if d.Score != 0 || d.ScoreCount != 0 {
-		t.Fatalf("lookup 无评分字段, 应为 0: %v/%d", d.Score, d.ScoreCount)
-	}
-	lookup := map[string]string{}
-	for _, f := range d.Facts {
-		lookup[f.K] = f.V
-	}
-	if lookup["导演"] != "Christopher Nolan" || lookup["类型"] != "動作與歷險" ||
-		lookup["分级"] != "輔12級" || lookup["片长"] != "172 分钟" {
-		t.Fatalf("事实行异常: %v", lookup)
-	}
-	if d.Link != "https://itunes.apple.com/tw/movie/id6822007631" {
-		t.Fatalf("外链异常: %q", d.Link)
-	}
-	if _, err := i.Detail(context.Background(), "0"); err == nil {
+	if _, err := i.FetchRecord(context.Background(), "0"); err == nil {
 		t.Fatal("非法 id 应报错")
 	}
 }
@@ -147,7 +130,7 @@ func TestITunesLookupEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 	i := &ITunes{f: newFetcher(srv.Client(), 0, "test"), baseURL: srv.URL}
-	if _, err := i.Detail(context.Background(), "485191790"); err != ErrNotFound {
+	if _, err := i.FetchRecord(context.Background(), "485191790"); err != ErrNotFound {
 		t.Fatalf("lookup 0 结果应映射 ErrNotFound, 实际 %v", err)
 	}
 }

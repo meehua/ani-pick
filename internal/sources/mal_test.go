@@ -205,41 +205,19 @@ func TestMALDetailAndValidate(t *testing.T) {
 		}
 	})
 
-	// 详情代理：字段映射进 Detail
-	d, err := tr.Detail(context.Background(), "5")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d.Title != "Sample Anime" || d.Platform != "剧场版" || d.Score != 6.5 || d.ScoreCount != 800 {
-		t.Fatalf("详情基础字段异常: %+v", d)
-	}
-	if d.Episodes != 1 || d.Runtime != 90 { // 5400s → 90min
-		t.Fatalf("集数/片长映射异常: eps=%d runtime=%d", d.Episodes, d.Runtime)
-	}
-	if d.EndDate != "2018-04-07" || d.Image != "/s.jpg" {
-		t.Fatalf("日期/图片映射异常: %q %q", d.EndDate, d.Image)
-	}
-	if d.Summary != "p" {
-		t.Fatalf("简介清洗异常: %q", d.Summary)
-	}
-	hasStudio := false
-	for _, f := range d.Facts {
-		if f.K == "制作" && f.V == "Studio X" {
-			hasStudio = true
-		}
-	}
-	if !hasStudio {
-		t.Fatalf("facts 缺制作方: %+v", d.Facts)
-	}
-	if !strings.HasPrefix(d.Link, "https://myanimelist.net/anime/5") {
-		t.Fatalf("外链异常: %q", d.Link)
-	}
+	// 单条记录归一化：身份键 + 简介随抓取入库（详情只读库不回上游）
 	rec, err := tr.FetchRecord(context.Background(), "5")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rec.SourceRef != "5" || rec.ExtKey != "5" {
 		t.Fatalf("单条刷新身份异常: %s/%s", rec.SourceRef, rec.ExtKey)
+	}
+	if rec.Name != "Sample Anime" || rec.Platform != "剧场版" || rec.Score != 6.5 || rec.RatingTotal != 800 {
+		t.Fatalf("单条记录基础字段异常: %+v", rec)
+	}
+	if rec.Summary != "p" {
+		t.Fatalf("简介清洗异常: %q", rec.Summary)
 	}
 
 	// 校验器：200 = 有效
@@ -268,7 +246,7 @@ func TestMALNotConfigured(t *testing.T) {
 	if tr.Configured() {
 		t.Fatal("无 client_id 应为未配置")
 	}
-	if _, err := tr.Detail(context.Background(), "1"); err != ErrNotConfigured {
+	if _, err := tr.FetchRecord(context.Background(), "1"); err != ErrNotConfigured {
 		t.Fatalf("未配置应返回 ErrNotConfigured, 实际 %v", err)
 	}
 	if err := tr.HarvestFull(&Scope{Ctx: context.Background()}); err != ErrNotConfigured {

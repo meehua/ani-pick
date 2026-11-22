@@ -126,15 +126,12 @@ func TestNormalizeCacheNewFields(t *testing.T) {
 	if v := cacheInt(s.Cache.OverviewTTL); v != 3 {
 		t.Fatalf("nil OverviewTTL 应落默认 3，实际 %d", v)
 	}
-	if v := cacheInt(s.Cache.ExtDetailTTL); v != 600 {
-		t.Fatalf("nil ExtDetailTTL 应落默认 600，实际 %d", v)
-	}
 	if s.Cache.MaxKeys != 256 {
 		t.Fatalf("MaxKeys 零值应落默认 256，实际 %d", s.Cache.MaxKeys)
 	}
 
-	vm, vmt, vo, ved := 60, 1200, 0, -1
-	s = AppSettings{Cache: CacheSettings{MetaTTL: &vm, MetaTagsTTL: &vmt, OverviewTTL: &vo, ExtDetailTTL: &ved, MaxKeys: 512}}
+	vm, vmt, vo := 60, 1200, 0
+	s = AppSettings{Cache: CacheSettings{MetaTTL: &vm, MetaTagsTTL: &vmt, OverviewTTL: &vo, MaxKeys: 512}}
 	s.Normalize()
 	if v := cacheInt(s.Cache.MetaTTL); v != 60 {
 		t.Fatalf("60 应保留，实际 %d", v)
@@ -144,9 +141,6 @@ func TestNormalizeCacheNewFields(t *testing.T) {
 	}
 	if v := cacheInt(s.Cache.OverviewTTL); v != 0 {
 		t.Fatalf("显式 0 应保留为 0（关闭），实际 %d", v)
-	}
-	if v := cacheInt(s.Cache.ExtDetailTTL); v != 600 {
-		t.Fatalf("负值应视作未设置回落默认 600，实际 %d", v)
 	}
 	if s.Cache.MaxKeys != 512 {
 		t.Fatalf("MaxKeys 512 应保留，实际 %d", s.Cache.MaxKeys)

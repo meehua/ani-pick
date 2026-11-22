@@ -44,8 +44,6 @@ export interface ManifestSource {
   native: boolean
   /** 有效优先级（越小越优先；管理设置可调） */
   priority: number
-  /** 详情获取策略：proxy=服务端代理 | direct=浏览器直连 */
-  detail: 'proxy' | 'direct'
   /** 配置状态（凭据是否已填写） */
   configured: boolean
   /** 登记表声明支持凭据校验（抓取设置页才渲染「校验凭据」按钮） */
@@ -89,6 +87,8 @@ export interface SubjectSourceRow {
   platform?: string
   date?: string
   image?: string
+  /** 该行自己的简介（主行缺简介时的库内兜底） */
+  summary?: string
 }
 
 export interface Subject {
@@ -111,12 +111,16 @@ export interface Subject {
   nsfw: boolean
   meta_tags: string[]
   image: string
+  /** 条目简介（抓取时随上游载荷入库；详情页只读本站索引数据） */
+  summary?: string
   tags_total: number
   locked: boolean
   fetched_at: string
   tags?: TagVote[]
   /** 所在作品组内的全部来源行（仅详情响应有；单源作品只有自己） */
   sources?: SubjectSourceRow[]
+  /** 主行在各源官方站点的条目外链（仅详情响应有，服务端按登记表模板拼出） */
+  url?: string
 }
 
 export interface SearchResult {
@@ -237,8 +241,6 @@ export interface CacheSettings {
   meta_ttl: number
   meta_tags_ttl: number
   overview_ttl: number
-  /** 扩展源详情代理缓存 TTL（秒）；回源要等上游响应，默认 600 */
-  ext_detail_ttl: number
   max_keys: number
   /** 元标签候选缓存的键上限；0 = 默认 64 */
   meta_tags_max_keys: number
@@ -378,7 +380,7 @@ export interface MetaResponse {
   build?: string
   stats: Stats
   crawler: CrawlState
-  /** 来源登记表公开清单（词表/徽标/详情分派/筛选 chips 的唯一来源） */
+  /** 来源登记表公开清单（词表/徽标/外链模板/筛选 chips 的唯一来源） */
   sources?: ManifestSource[]
   /** 站点级分类词表（双层词表的外层；浏览 chips/首页类型卡按它渲染） */
   kinds?: ManifestKind[]
@@ -539,31 +541,3 @@ export interface BgmUser {
   avatar?: { large?: string; medium?: string; small?: string }
 }
 
-// ---------- 扩展源详情代理（/api/subjects/{id}/detail） ----------
-
-export interface ExtFact {
-  k: string
-  v: string
-}
-
-/** 服务端归一化后的扩展源详情；上游没有的字段留空，前端沿用缺省退化逻辑 */
-export interface ExtDetail {
-  source: string
-  source_ref: string
-  title: string
-  title_cn?: string
-  platform?: string
-  date?: string
-  end_date?: string
-  image?: string
-  backdrop?: string
-  summary?: string
-  /** 已归一到 10 分制 */
-  score?: number
-  score_count?: number
-  episodes?: number
-  runtime?: number
-  tags?: string[]
-  facts?: ExtFact[]
-  link?: string
-}

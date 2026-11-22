@@ -658,6 +658,7 @@ type GroupSource struct {
 	Platform    string  `json:"platform,omitempty"`
 	Date        string  `json:"date,omitempty"`
 	Image       string  `json:"image,omitempty"`
+	Summary     string  `json:"summary,omitempty"`
 }
 
 // GroupSources 返回一个条目所在作品组的全部来源行（多源评分对比/外链用）。
@@ -667,7 +668,7 @@ func (s *Store) GroupSources(ctx context.Context, id int64) ([]GroupSource, erro
 	rows, err := s.Pool.Query(ctx, `
 		SELECT g.id, g.source, g.raw_score::float8, g.raw_rating_total, g.source_ref,
 			g.name, g.name_cn, g.platform,
-			COALESCE(to_char(g.date, 'YYYY-MM-DD'), ''), g.image
+			COALESCE(to_char(g.date, 'YYYY-MM-DD'), ''), g.image, g.summary
 		FROM subjects g
 		WHERE g.work_id = COALESCE((SELECT NULLIF(work_id, 0) FROM subjects WHERE id = $1), $1)
 		ORDER BY g.id`, id)
@@ -679,7 +680,7 @@ func (s *Store) GroupSources(ctx context.Context, id int64) ([]GroupSource, erro
 	for rows.Next() {
 		var g GroupSource
 		if err := rows.Scan(&g.ID, &g.Source, &g.Score, &g.RatingTotal, &g.SourceRef,
-			&g.Name, &g.NameCN, &g.Platform, &g.Date, &g.Image); err != nil {
+			&g.Name, &g.NameCN, &g.Platform, &g.Date, &g.Image, &g.Summary); err != nil {
 			return nil, err
 		}
 		out = append(out, g)

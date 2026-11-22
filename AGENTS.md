@@ -41,9 +41,7 @@ HTML 与 API 每次回源）。以下约束是实现里已经落地的取舍，�
   搜索页结果、`/api/tags` 标签候选、条目详情 `/api/subjects/{id}`（按 id、上限
   `max_keys` 键）共用 `query_ttl`（默认 60s）；公开 GET 响应 `Cache-Control` 用
   `public_ttl`（默认 30s）——连同 `/api/meta`（`meta_ttl` 30s）、`/api/meta-tags`
-  （`meta_tags_ttl` 10 分钟）、扩展源详情代理 `/api/subjects/{id}/detail`
-  （`ext_detail_ttl` 默认 10 分钟——回源要等上游响应，秒级延迟不按查询节奏重付）、
-  `/api/admin/overview`（`overview_ttl` 3s，抓取/设置
+  （`meta_tags_ttl` 10 分钟）、`/api/admin/overview`（`overview_ttl` 3s，抓取/设置
   等动作后 `invalidateOverview()`）全部存系统设置（`AppSettings.Cache`，管理后台
   「设置 → 查询缓存」可调），server 侧 60s 快照 + 保存设置后立刷，禁止在
   handler 里写死 TTL。TTL 语义：**0 = 关闭该层缓存**（跳过读写，浏览器缓存退回

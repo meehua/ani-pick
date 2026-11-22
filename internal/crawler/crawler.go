@@ -721,11 +721,9 @@ func (c *Crawler) RefreshOne(ctx context.Context, id int64) (store.Subject, erro
 	if err != nil {
 		return store.Subject{}, err
 	}
-	if cur.Source != "" {
-		// 详情获取策略按登记表声明：代理来源走各自适配器的单条记录接口
-		if src, ok := registry.Get(cur.Source); ok && src.Detail == registry.DetailProxy {
-			return c.refreshExtOne(ctx, cur)
-		}
+	if cur.Source != "" && cur.Source != registry.NativeID() {
+		// 扩展源走各自适配器的单条记录接口（简介随载荷入库）
+		return c.refreshExtOne(ctx, cur)
 	}
 
 	settings, err := c.st.LoadSettings(ctx, c.defaults)
@@ -927,6 +925,7 @@ func convert(s bgm.Subject) store.Subject {
 		NSFW:        s.NSFW,
 		MetaTags:    s.MetaTags,
 		Image:       image,
+		Summary:     s.Summary,
 		TagsTotal:   votesTotal,
 		Tags:        tags,
 	}

@@ -117,28 +117,12 @@ func TestAniListDetailAndFetch(t *testing.T) {
 	if rec.Score != 8.5 || rec.RatingTotal != 1000 || rec.Name != "Shingeki EN" {
 		t.Fatalf("FetchRecord 异常: %+v", rec)
 	}
-
-	d, err := a.Detail(context.Background(), "16498")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d.Title != "Shingeki EN" || d.Backdrop != "https://s4.anilist.co/banner.jpg" ||
-		d.EndDate != "2013-09-01" || d.Summary != "简介 文本" || d.Runtime != 24 {
-		t.Fatalf("详情异常: %+v", d)
-	}
-	lookup := map[string]string{}
-	for _, f := range d.Facts {
-		lookup[f.K] = f.V
-	}
-	if lookup["原名"] != "日本語Shingeki" || lookup["制作"] != "Studio X" ||
-		lookup["状态"] != "已完结" || lookup["人气"] != "108.1万 人看过" {
-		t.Fatalf("事实行异常: %v", lookup)
-	}
-	if d.Link != "https://anilist.co/anime/16498" {
-		t.Fatalf("外链异常: %q", d.Link)
+	// 简介随抓取入库（详情只读库不回上游）：StripText 清理内联标记
+	if rec.Summary != "简介 文本" {
+		t.Fatalf("简介异常: %q", rec.Summary)
 	}
 	if !strings.Contains(gotQuery, "Media(id: $id") {
-		t.Fatalf("详情查询应按 id 取单条: %s", gotQuery)
+		t.Fatalf("单条查询应按 id 取: %s", gotQuery)
 	}
 }
 
@@ -149,7 +133,7 @@ func TestAniListGraphQLError(t *testing.T) {
 	defer srv.Close()
 	a := &AniList{f: newFetcher(srv.Client(), 0, "test"), baseURL: srv.URL}
 	// GraphQL 层错误体是 200 + errors 字段；media id 为 0 → ErrNotFound 语义
-	if _, err := a.Detail(context.Background(), "1"); err != ErrNotFound {
+	if _, err := a.FetchRecord(context.Background(), "1"); err != ErrNotFound {
 		t.Fatalf("空 Media 应返回 ErrNotFound, 实际 %v", err)
 	}
 }

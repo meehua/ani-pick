@@ -63,15 +63,11 @@ func TestSourceManifest(t *testing.T) {
 		}
 	}
 	bgm := byID[registry.SourceBGM]
-	if !bgm.Native || bgm.Detail != string(registry.DetailDirect) || !bgm.Configured {
+	if !bgm.Native || !bgm.Configured {
 		t.Fatalf("原生索引声明异常: %+v", bgm)
 	}
-	tmdb := byID[registry.SourceTMDB]
-	if tmdb.Detail != string(registry.DetailProxy) {
-		t.Fatalf("扩展源详情策略应为代理: %+v", tmdb)
-	}
 	// 配置状态来自适配器（fake 未配置）
-	if tmdb.Configured {
+	if byID[registry.SourceTMDB].Configured {
 		t.Fatal("未配置的 TMDB 应报 configured=false")
 	}
 	if len(bgm.Types) != 5 {

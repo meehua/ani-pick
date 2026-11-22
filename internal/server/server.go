@@ -27,15 +27,14 @@ import (
 var distFS embed.FS
 
 type Server struct {
-	store     *store.Store
-	crawler   *crawler.Crawler
-	defaults  store.AppSettings
-	static    fs.FS
-	limits    *limiter
-	version   string
-	commit    string
-	detailers map[string]sources.Detailer // 扩展源详情代理（bgm 详情走浏览器直连，不经服务端）
-	creds     *sources.CredStore          // 数据源凭据快照（后台设置，保存立刷）
+	store    *store.Store
+	crawler  *crawler.Crawler
+	defaults store.AppSettings
+	static   fs.FS
+	limits   *limiter
+	version  string
+	commit   string
+	creds    *sources.CredStore // 数据源凭据快照（后台设置，保存立刷）
 
 	// 出站通道：baseHTTPClient 是启动期通道（DoH/直连）；appliedProxy 是当前
 	// 出站通道状态：设置（代理/DoH/ECH）签名变化才重建客户端。
@@ -87,8 +86,6 @@ type cachedJSON struct {
 type Options struct {
 	Version string
 	Commit  string
-	// Detailers 是扩展源详情代理（key=subjects.source）。
-	Detailers map[string]sources.Detailer
 	// Credentials 是数据源凭据快照（main 装配；server 随设置加载/保存立刷）。
 	Credentials *sources.CredStore
 }
@@ -127,7 +124,6 @@ func New(st *store.Store, cw *crawler.Crawler, defaults store.AppSettings, opts 
 		limits:      newLimiter(),
 		version:     ver,
 		commit:      opts.Commit,
-		detailers:   opts.Detailers,
 		creds:       opts.Credentials,
 		metaTags:    map[string]cachedMetaTags{},
 		pageCache:   map[string]cachedJSON{},
@@ -173,7 +169,6 @@ func (s *Server) Handler() http.Handler {
 	reg("GET /api/meta", s.handleMeta)
 	reg("GET /api/subjects", s.handleSearch)
 	reg("GET /api/subjects/{id}", s.handleSubjectIndex)
-	reg("GET /api/subjects/{id}/detail", s.handleSubjectExtDetail)
 	reg("GET /api/tags", s.handleTags)
 	reg("GET /api/meta-tags", s.handleMetaTags)
 
@@ -241,7 +236,6 @@ type cfgSnapshot struct {
 	publicTTL     time.Duration // 公开 GET 响应 Cache-Control max-age
 	metaTTL       time.Duration // /api/meta
 	metaTagsTTL   time.Duration // /api/meta-tags
-	extDetailTTL  time.Duration // /api/subjects/{id}/detail 扩展源代理详情
 	overviewTTL   time.Duration // /api/admin/overview
 	maxKeys       int           // 搜索页/标签候选/详情/搜索总数缓存的键上限
 	rateRPS       float64       // 每 IP 常规请求速率（次/秒）
@@ -270,7 +264,6 @@ func (s *Server) applySnapshot(settings store.AppSettings) {
 		publicTTL:        time.Duration(store.CacheSec(c.PublicTTL, 30)) * time.Second,
 		metaTTL:          time.Duration(store.CacheSec(c.MetaTTL, 30)) * time.Second,
 		metaTagsTTL:      time.Duration(store.CacheSec(c.MetaTagsTTL, 600)) * time.Second,
-		extDetailTTL:     time.Duration(store.CacheSec(c.ExtDetailTTL, 600)) * time.Second,
 		overviewTTL:      time.Duration(store.CacheSec(c.OverviewTTL, 3)) * time.Second,
 		maxKeys:          c.MaxKeys,
 		rateRPS:          float64(sec.RateLimitRPS),

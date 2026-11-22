@@ -9,7 +9,6 @@ import {
   bgmPersons,
   bgmRelations,
   bgmSubject,
-  getSubjectExtDetail,
   getSubjectIndex,
   resetBgmCircuit,
 } from '../../api/client'
@@ -28,7 +27,7 @@ import { getLastUsedEndpoint } from '../../net/endpoints'
 import { loadPage, savePage } from '../../lib/page-cache'
 import { useScrollMemory } from '../../lib/use-scroll-memory'
 import {
-  extToBgmSubject,
+  extRowToSubject,
   infoValue,
   type GroupExtra,
   type SubjectSnapshot,
@@ -58,7 +57,6 @@ export default function SubjectPage() {
   const [tab, setTab] = React.useState<string | null>(null)
   const [viaMirror, setViaMirror] = React.useState(false)
   const [extLinkHref, setExtLinkHref] = React.useState<string | null>(null)
-  const [altSummary, setAltSummary] = React.useState<{ text: string; source: string } | null>(null)
   // 组内其他扩展源的归一化详情（键=该行公开 id）：信息栏按源分节 + 简介折叠共存
   const [groupExtras, setGroupExtras] = React.useState<Record<string, GroupExtra>>({})
 
@@ -91,7 +89,6 @@ export default function SubjectPage() {
       setEpisodes(snap.episodes)
       setViaMirror(snap.viaMirror)
       setExtLinkHref(snap.extLinkHref ?? null)
-      setAltSummary(snap.altSummary ?? null)
       setGroupExtras(snap.groupExtras ?? {})
       setLoading(false)
       return
@@ -103,96 +100,43 @@ export default function SubjectPage() {
     setError(null)
     setSubject(null)
     setExtLinkHref(null)
-    setAltSummary(null)
     setGroupExtras({})
     setSummaryOpen(false)
     setAllInfo(false)
 
-    // 组内其他来源行的详情并行拉取（扩展源走服务端代理，同组直连源走浏览器
-    // 直连，与主获取同一分派；失败静默跳过该行）：不阻塞主渲染——主内容先画，
-    // 信息栏融合表与简介折叠到达后补入。
+    // 组内其他来源行的动态信息栏并行拉取：bgm 行走浏览器直连 bgm API（不经过
+    // 本站接口）；扩展源行不再回上游——其简介与外链都在本站索引行上（库数据）。
+    // 失败静默跳过该行，不阻塞主渲染。
     const fetchGroupExtras = (indexData: IndexedSubject | null) => {
-      const rows = (indexData?.sources ?? []).filter(s => s.id !== subjectID)
+      const rows = (indexData?.sources ?? []).filter(
+        s => s.id !== subjectID && !isExtSource(s.source),
+      )
       for (const row of rows) {
-        if (isExtSource(row.source)) {
-          getSubjectExtDetail(row.id, ctrl.signal)
-            .then(d => {
-              if (!alive) return
-              setGroupExtras(prev => ({
-                ...prev,
-                [String(row.id)]: { facts: d.facts ?? [], summary: d.summary },
-              }))
-            })
-            .catch(() => {
-              // 该来源详情不可用：静默跳过，融合表里不出现该行
-            })
-        } else {
-          // 同组直连源行的字段也并入融合表（每组至多一两行，复用详情缓存）
-          bgmSubject(row.id, token, ctrl.signal)
-            .then(b => {
-              if (!alive) return
-              setGroupExtras(prev => ({
-                ...prev,
-                [String(row.id)]: {
-                  facts: (b.infobox ?? []).map(f => ({ k: f.key, v: infoValue(f.value) })),
-                },
-              }))
-            })
-            .catch(() => {
-              // 同上：静默跳过
-            })
-        }
+        bgmSubject(row.id, token, ctrl.signal)
+          .then(b => {
+            if (!alive) return
+            setGroupExtras(prev => ({
+              ...prev,
+              [String(row.id)]: {
+                facts: (b.infobox ?? []).map(f => ({ k: f.key, v: infoValue(f.value) })),
+              },
+            }))
+          })
+          .catch(() => {
+            // 该行信息栏不可用：静默跳过，融合表里不出现该行
+          })
       }
     }
 
-    // 主行缺简介时用组内其他来源的简介补（按主行优先级顺序尝试，命中即停；
-    // 详情获取策略按来源 manifest 分派：代理源走服务端，直连源走浏览器——与主获取一致）。
-    const fetchSummaryFallback = async (indexData: IndexedSubject | null) => {
-      const rows = (indexData?.sources ?? []).filter(s => s.id !== subjectID)
-      for (const row of rows) {
-        if (!alive) return
-        try {
-          if (isExtSource(row.source)) {
-            const d = await getSubjectExtDetail(row.id, ctrl.signal)
-            const text = (d.summary ?? '').trim()
-            if (text && alive) {
-              setAltSummary({ text, source: row.source })
-              return
-            }
-          } else {
-            const b = await bgmSubject(row.id, undefined, ctrl.signal)
-            const text = (b.summary ?? '').trim()
-            if (text && alive) {
-              setAltSummary({ text, source: row.source })
-              return
-            }
-          }
-        } catch (e) {
-          if ((e as Error).name === 'AbortError' || !alive) return
-          // 该来源简介不可用：继续试下一来源
-        }
-      }
-    }
-
-    // 详情获取器按条目来源分派：bgm 走浏览器直连（凭据不出本机），
-    // 其余来源走服务端代理端点（TMDB key 与限速不出服务端）。
-    // 来源要先由索引行给出，因此索引详情先行、详情获取随后。
+    // 详情数据全部来自本站索引（库）：扩展源主行直接用索引行渲染——简介在
+    // 抓取时已随上游载荷入库，外链由登记表模板按内部引用拼出；bgm 主行走
+    // 浏览器直连 bgm API 取动态信息栏（凭据不出本机，不经过本站接口）。
     const dispatch = (indexData: IndexedSubject | null) => {
       if (!alive) return
-      if (isExtSource(indexData?.source)) {
-        getSubjectExtDetail(subjectID, ctrl.signal)
-          .then(d => {
-            if (!alive) return
-            setExtLinkHref(d.link ?? null)
-            setSubject(extToBgmSubject(d, indexData))
-            setLoading(false)
-            if (!(d.summary ?? '').trim()) void fetchSummaryFallback(indexData)
-          })
-          .catch(err => {
-            if (!alive || (err as Error).name === 'AbortError') return
-            setError(err)
-            setLoading(false)
-          })
+      if (indexData && isExtSource(indexData.source)) {
+        setSubject(extRowToSubject(indexData))
+        setExtLinkHref(indexData?.url ?? null)
+        setLoading(false)
         return
       }
       bgmSubject(subjectID, token, ctrl.signal)
@@ -210,7 +154,6 @@ export default function SubjectPage() {
           }
           setViaMirror(getLastUsedEndpoint()?.kind === 'mirror')
           setLoading(false)
-          if (!(sub.summary ?? '').trim()) void fetchSummaryFallback(indexData)
           void Promise.allSettled([
             bgmCharacters(subjectID, token, ctrl.signal),
             bgmPersons(subjectID, token, ctrl.signal),
@@ -262,11 +205,10 @@ export default function SubjectPage() {
         episodes,
         viaMirror,
         extLinkHref,
-        altSummary,
         groupExtras,
       } satisfies SubjectSnapshot)
     }
-  }, [location.key, loading, subject, index, characters, persons, relations, episodes, viaMirror, extLinkHref, altSummary, groupExtras, subjectID])
+  }, [location.key, loading, subject, index, characters, persons, relations, episodes, viaMirror, extLinkHref, groupExtras, subjectID])
 
   if (!Number.isFinite(subjectID) || subjectID <= 0) {
     return <ErrorNote error={new ApiError(400, 'bad_id', '无效的条目 ID')} />
@@ -309,7 +251,12 @@ export default function SubjectPage() {
   // 与主行选择同一份序）逐行提供自己的字段——先到先得、同值静默去重、
   // 异值并陈。主行字段用当前已取到的 infobox；同组其他行的字段来自并行
   // 拉取的 groupExtras（失败的行静默缺位）。索引未返回时退化为只有主行。
-  const displayedSummary = summary || (altSummary?.text ?? '')
+  // 主行缺简介时按组序取组内来源行的库内简介兜底（抓取时入库），并标注出处
+  const altSummaryRow = summary
+    ? null
+    : (index?.sources ?? []).find(r => r.id !== subjectID && (r.summary ?? '').trim())
+  const displayedSummary = summary || (altSummaryRow?.summary ?? '').trim()
+
   const groupRows = index?.sources ?? []
   const mainFacts = (subject.infobox ?? []).map(f => ({ k: f.key, v: infoValue(f.value) }))
   const fusionRows: FusionRow[] = []
@@ -333,11 +280,11 @@ export default function SubjectPage() {
   const summaryGroups = mergeSummaries(
     displayedSummary,
     groupRows
-      .filter(row => row.id !== subjectID && (groupExtras[String(row.id)]?.summary ?? '').trim())
+      .filter(row => row.id !== subjectID && (row.summary ?? '').trim())
       .map(row => ({
         source: row.source,
         variant: variantOf(row),
-        text: (groupExtras[String(row.id)]?.summary ?? '').trim(),
+        text: (row.summary ?? '').trim(),
       })),
   )
 
@@ -351,7 +298,7 @@ export default function SubjectPage() {
         tags={tags}
         counts={counts}
         summary={displayedSummary}
-        summaryNote={summary || !altSummary ? undefined : '简介来自 ' + sourceLabel(altSummary.source)}
+        summaryNote={altSummaryRow ? '简介来自 ' + sourceLabel(altSummaryRow.source) : undefined}
         sources={index?.sources}
         summaryOpen={summaryOpen}
         onToggleSummary={() => setSummaryOpen(v => !v)}

@@ -71,6 +71,7 @@ type tmdbDiscoverItem struct {
 	OriginalTitle string  `json:"original_title"`
 	Name          string  `json:"name"`
 	OriginalName  string  `json:"original_name"`
+	Overview      string  `json:"overview"`
 	PosterPath    string  `json:"poster_path"`
 	ReleaseDate   string  `json:"release_date"`
 	FirstAirDate  string  `json:"first_air_date"`
@@ -248,6 +249,7 @@ func (t *TMDB) convert(kind string, it tmdbDiscoverItem, genres map[int]string) 
 		RatingTotal: it.VoteCount,
 		NSFW:        it.Adult,
 		Image:       tmdbPoster(it.PosterPath),
+		Summary:     StripText(it.Overview),
 		MetaTags:    []string{},
 		TagsTotal:   0, // 扩展源标签无票数，tags_total 恒 0
 		Tags:        truncateTags(names),
@@ -358,128 +360,38 @@ func (t *TMDB) ValidateCredentials(ctx context.Context, creds map[string]string)
 	return nil
 }
 
-// Detail 取 TMDB 归一化详情。ref 形如 "movie/123"、"tv/456"（与 source_ref 一致）。
-func (t *TMDB) Detail(ctx context.Context, ref string) (*Detail, error) {
-	_, d, err := t.fetchRecord(ctx, ref)
-	return d, err
-}
-
 // FetchRecord 取上游单条记录并归一化为索引行（管理端单条刷新）。
 func (t *TMDB) FetchRecord(ctx context.Context, ref string) (store.Subject, error) {
-	rec, _, err := t.fetchRecord(ctx, ref)
-	return rec, err
-}
-
-// fetchRecord 一次上游请求同时产出索引行与展示详情（字段同源，映射分两份）。
-func (t *TMDB) fetchRecord(ctx context.Context, ref string) (store.Subject, *Detail, error) {
 	if !t.Configured() {
-		return store.Subject{}, nil, ErrNotConfigured
+		return store.Subject{}, ErrNotConfigured
 	}
 	kind, id, err := tmdbParseRef(ref)
 	if err != nil {
-		return store.Subject{}, nil, err
+		return store.Subject{}, err
 	}
 	q := url.Values{}
 	q.Set("language", "zh-CN")
-	q.Set("append_to_response", "credits")
 	u, headers := t.authURL("/"+kind+"/"+id, q)
 	var it tmdbDetailItem
 	if err := t.f.getJSONHeaders(ctx, u, &it, headers); err != nil {
-		return store.Subject{}, nil, err
+		return store.Subject{}, err
 	}
 
 	isTV := kind == "tv"
 	title := it.Title
 	original := it.OriginalTitle
 	date := NormalizeDate(it.ReleaseDate)
-	endDate := ""
-	runtime := it.Runtime
-	episodes := 0
 	platform := ""
 	if isTV {
 		title = it.Name
 		original = it.OriginalName
 		date = NormalizeDate(it.FirstAirDate)
-		endDate = NormalizeDate(it.LastAirDate)
-		if len(it.EpisodeRunTime) > 0 {
-			runtime = it.EpisodeRunTime[0]
-		}
-		episodes = it.NumberOfEpisodes
 		platform = "剧集"
 	}
 
 	tagNames := make([]string, 0, len(it.Genres))
 	for _, g := range it.Genres {
 		tagNames = append(tagNames, g.Name)
-	}
-
-	facts := make([]Fact, 0, 8)
-	if original != "" && original != title {
-		facts = append(facts, Fact{K: "原名", V: original})
-	}
-	crewBy := func(jobs ...string) string {
-		seen := map[string]struct{}{}
-		var names []string
-		for _, c := range it.Credits.Crew {
-			for _, job := range jobs {
-				if c.Job == job {
-					if _, ok := seen[c.Name]; !ok {
-						seen[c.Name] = struct{}{}
-						names = append(names, c.Name)
-					}
-				}
-			}
-		}
-		return strings.Join(names, " / ")
-	}
-	if dir := crewBy("Director", "Creator"); dir != "" {
-		facts = append(facts, Fact{K: "导演", V: dir})
-	}
-	if w := crewBy("Screenplay", "Writer", "Story"); w != "" && w != dir2(facts) {
-		facts = append(facts, Fact{K: "编剧", V: w})
-	}
-	if len(it.CreatedBy) > 0 {
-		var names []string
-		for _, c := range it.CreatedBy {
-			names = append(names, c.Name)
-		}
-		facts = append(facts, Fact{K: "主创", V: strings.Join(names, " / ")})
-	}
-	if cast := castNames(it.Credits.Cast, 5); cast != "" {
-		facts = append(facts, Fact{K: "主演", V: cast})
-	}
-	if len(it.Genres) > 0 {
-		facts = append(facts, Fact{K: "类型", V: strings.Join(tagNames, " / ")})
-	}
-	if len(it.ProductionC) > 0 {
-		var names []string
-		for _, c := range it.ProductionC {
-			names = append(names, c.Name)
-		}
-		facts = append(facts, Fact{K: "制片国家/地区", V: strings.Join(names, " / ")})
-	}
-	if it.NumberOfSeasons > 0 {
-		facts = append(facts, Fact{K: "季数", V: strconv.Itoa(it.NumberOfSeasons)})
-	}
-	if len(it.Networks) > 0 {
-		var names []string
-		for _, n := range it.Networks {
-			names = append(names, n.Name)
-		}
-		facts = append(facts, Fact{K: "播出方", V: strings.Join(names, " / ")})
-	}
-	if it.IMDbID != "" {
-		facts = append(facts, Fact{K: "IMDb", V: it.IMDbID})
-	}
-	if it.Status != "" {
-		facts = append(facts, Fact{K: "状态", V: tmdbStatusCN(it.Status)})
-	}
-	if runtime > 0 {
-		label := "片长"
-		if isTV {
-			label = "单集片长"
-		}
-		facts = append(facts, Fact{K: label, V: strconv.Itoa(runtime) + " 分钟"})
 	}
 
 	rec := store.Subject{
@@ -495,6 +407,7 @@ func (t *TMDB) fetchRecord(ctx context.Context, ref string) (store.Subject, *Det
 		RatingTotal: it.VoteCount,
 		NSFW:        it.Adult,
 		Image:       tmdbPoster(it.PosterPath),
+		Summary:     StripText(it.Overview),
 		MetaTags:    []string{},
 		TagsTotal:   0,
 		Tags:        truncateTags(tagNames),
@@ -502,66 +415,7 @@ func (t *TMDB) fetchRecord(ctx context.Context, ref string) (store.Subject, *Det
 	if isTV {
 		rec.Type = registry.KindCode(tmdbSpec.ID, registry.KindTV)
 	}
-
-	d := &Detail{
-		Source:     tmdbSpec.ID,
-		SourceRef:  ref,
-		Title:      title,
-		TitleCN:    "",
-		Platform:   platform,
-		Date:       date,
-		EndDate:    endDate,
-		Image:      tmdbPoster(it.PosterPath),
-		Backdrop:   tmdbBackdrop(it.BackdropPath),
-		Summary:    StripText(it.Overview),
-		Score:      registry.ScoreOf(tmdbSpec.ID, it.VoteAverage),
-		ScoreCount: it.VoteCount,
-		Episodes:   episodes,
-		Runtime:    runtime,
-		Tags:       tagNames,
-		Facts:      facts,
-		Link:       registry.SubjectURL(tmdbSpec.ID, ref),
-	}
-	return rec, d, nil
-}
-
-func dir2(facts []Fact) string {
-	for _, f := range facts {
-		if f.K == "导演" {
-			return f.V
-		}
-	}
-	return ""
-}
-
-func castNames(cast []tmdbCrew, n int) string {
-	var names []string
-	for _, c := range cast {
-		if len(names) >= n {
-			break
-		}
-		if c.Name != "" {
-			names = append(names, c.Name)
-		}
-	}
-	return strings.Join(names, " / ")
-}
-
-// tmdbStatusCN 状态值翻译（常见枚举，未知原样保留）。
-func tmdbStatusCN(s string) string {
-	switch s {
-	case "Released", "Ended":
-		return "已完结"
-	case "Returning Series":
-		return "连载中"
-	case "In Production":
-		return "制作中"
-	case "Planned":
-		return "计划中"
-	case "Canceled":
-		return "已取消"
-	}
-	return s
+	return rec, nil
 }
 
 // tmdbParseRef 拆出 kind 与数字 id（ref 形如 "movie/123"）。

@@ -140,7 +140,7 @@ await check('meta 下发来源登记表 manifest', async () => {
   // 原生索引常驻且详情策略为直连；优先级升序（有效优先级排序）
   const native = sources.find(s => s.native)
   assert(native, 'manifest 缺原生索引来源')
-  assert(native.detail === 'direct' && native.configured, '原生索引应直连且可用')
+  assert(native.configured, '原生索引应可用')
   assert(sources.every(s => typeof s.id === 'string' && typeof s.label === 'string' && Array.isArray(s.types)),
     'manifest 行结构异常')
   const prios = sources.map(s => s.priority)
@@ -174,16 +174,16 @@ await check('meta 下发来源登记表 manifest', async () => {
 })
 
 let extSubject = null
-await check('扩展源条目详情代理（已抓取时）', async () => {
+await check('扩展源索引详情带简介与外链（库数据，不回上游）', async () => {
   const source = ['tmdb', 'itunes', 'mal', 'anilist'].find(s => (extCount?.[s] ?? 0) > 0)
   if (!source) return // 尚未抓取扩展源：跳过
   const search = await json(`/api/subjects?source=${source}&page_size=1`)
   extSubject = search.body.items[0]
   assert(extSubject?.id >= 10000000000, `扩展 id 应 >= 1e10: ${extSubject?.id}`)
-  const { res, body } = await json(`/api/subjects/${extSubject.id}/detail`)
+  const { res, body } = await json(`/api/subjects/${extSubject.id}`)
   assert(res.status === 200, `status=${res.status}`)
-  assert(body.source === source, `详情来源不匹配: ${body.source}`)
-  assert(typeof body.title === 'string' && body.title.length > 0, '详情缺标题')
+  assert(typeof body.summary === 'string', '索引详情缺 summary 字段')
+  assert(typeof body.url === 'string' && body.url.startsWith('http'), '索引详情缺官方外链')
 })
 
 await check('索引详情带作品组来源清单', async () => {
@@ -193,14 +193,8 @@ await check('索引详情带作品组来源清单', async () => {
   assert(body.sources.every(s => typeof s.url === 'string' && typeof s.source === 'string'), 'sources 行结构异常')
 })
 
-await check('bgm 条目不走详情代理（400）', async () => {
-  const { res, body } = await json(`/api/subjects/${first.id}/detail`)
-  assert(res.status === 400, `status=${res.status}`)
-  assert(body?.error?.code === 'bgm_direct_only', `code=${body?.error?.code}`)
-})
-
-await check('详情代理：未收录 id 404', async () => {
-  const { res } = await json('/api/subjects/99999999999/detail')
+await check('详情代理端点已下线（404）', async () => {
+  const res = await fetch(base + `/api/subjects/${first.id}/detail`)
   assert(res.status === 404, `status=${res.status}`)
 })
 

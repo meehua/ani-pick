@@ -139,19 +139,9 @@ func main() {
 	}
 
 	cw := crawler.New(st, defaults, nil, harvesters)
-	detailers := make(map[string]sources.Detailer, len(harvesters))
-	for _, h := range harvesters {
-		d, ok := h.(sources.Detailer)
-		if !ok {
-			slog.Error("数据源适配器缺少详情接口", "source", h.Source())
-			os.Exit(1)
-		}
-		detailers[h.Source()] = d
-	}
 	srv, err := server.New(st, cw, defaults, server.Options{
 		Version:     version,
 		Commit:      commit,
-		Detailers:   detailers,
 		Credentials: creds,
 	})
 	if err != nil {

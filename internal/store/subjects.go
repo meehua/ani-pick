@@ -20,7 +20,7 @@ import (
 // score/rating_total 是作品组合成值（主行上物化）；raw_* 是该行所属来源的原始值。
 const subjectColumns = `s.id, s.source, s.source_ref, s.type, s.name, s.name_cn, COALESCE(to_char(s.date, 'YYYY-MM-DD'), ''),
 	s.platform, s.rank, s.score::float8, s.rating_total, s.raw_score::float8, s.raw_rating_total, s.wish, s.collect, s.doing, s.on_hold, s.dropped,
-	s.nsfw, s.meta_tags, s.image, s.tags_total, s.locked, s.fetched_at`
+	s.nsfw, s.meta_tags, s.image, s.summary, s.tags_total, s.locked, s.fetched_at`
 
 // 搜索总数缓存：翻页复用同一 count，上限防止关键词型 key 无界增长。
 // TTL 只是兜底，抓取结束/删除条目时由 InvalidateCounts 主动失效；
@@ -39,7 +39,7 @@ func scanSubject(row pgx.Row) (Subject, error) {
 	var sub Subject
 	err := row.Scan(&sub.ID, &sub.Source, &sub.SourceRef, &sub.Type, &sub.Name, &sub.NameCN, &sub.Date, &sub.Platform, &sub.Rank,
 		&sub.Score, &sub.RatingTotal, &sub.RawScore, &sub.RawRatingTotal, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
-		&sub.NSFW, &sub.MetaTags, &sub.Image, &sub.TagsTotal, &sub.Locked, &sub.FetchedAt)
+		&sub.NSFW, &sub.MetaTags, &sub.Image, &sub.Summary, &sub.TagsTotal, &sub.Locked, &sub.FetchedAt)
 	return sub, err
 }
 
@@ -282,9 +282,9 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 		err := tx.QueryRow(ctx, `
 			INSERT INTO subjects (id, source, source_ref, work_id, ext_key, alt_titles, type, name, name_cn, date,
 				platform, rank, score, rating_total, raw_score, raw_rating_total, wish, collect, doing, on_hold, dropped,
-				nsfw, meta_tags, image, tags_total, locked, fail_count, last_run_id, fetched_at, updated_at)
+				nsfw, meta_tags, image, summary, tags_total, locked, fail_count, last_run_id, fetched_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, $9, NULLIF($10, '')::date, $11, $12, $13, $14, $15, $16,
-				$17, $18, $19, $20, $21, $22, $23::text[], $24, $25, $26, 0, $27, now(), now())
+				$17, $18, $19, $20, $21, $22, $23::text[], $24, $25, $26, $27, 0, $28, now(), now())
 			ON CONFLICT (id) DO UPDATE SET
 				source = EXCLUDED.source, source_ref = EXCLUDED.source_ref,
 				ext_key = EXCLUDED.ext_key, alt_titles = EXCLUDED.alt_titles,
@@ -298,7 +298,7 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 				raw_score = EXCLUDED.raw_score, raw_rating_total = EXCLUDED.raw_rating_total,
 				wish = EXCLUDED.wish, collect = EXCLUDED.collect, doing = EXCLUDED.doing,
 				on_hold = EXCLUDED.on_hold, dropped = EXCLUDED.dropped, nsfw = EXCLUDED.nsfw,
-				meta_tags = EXCLUDED.meta_tags, image = EXCLUDED.image, tags_total = EXCLUDED.tags_total,
+				meta_tags = EXCLUDED.meta_tags, image = EXCLUDED.image, summary = EXCLUDED.summary, tags_total = EXCLUDED.tags_total,
 				locked = EXCLUDED.locked, fail_count = 0,
 				last_run_id = CASE WHEN EXCLUDED.last_run_id > 0 THEN EXCLUDED.last_run_id ELSE subjects.last_run_id END,
 				fetched_at = now(), updated_at = now()
@@ -306,7 +306,7 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 			ids[i], rec.Source, rec.SourceRef, workIDs[i], rec.ExtKey, rec.AltTitles,
 			rec.Type, rec.Name, rec.NameCN, rec.Date, rec.Platform,
 			rec.Rank, rec.Score, rec.RatingTotal, rec.Score, rec.RatingTotal, rec.Wish, rec.Collect, rec.Doing, rec.OnHold,
-			rec.Dropped, rec.NSFW, rec.MetaTags, rec.Image, rec.TagsTotal, rec.Locked, runID).Scan(&isInsert)
+			rec.Dropped, rec.NSFW, rec.MetaTags, rec.Image, rec.Summary, rec.TagsTotal, rec.Locked, runID).Scan(&isInsert)
 		if err != nil {
 			return inserted, updated, fmt.Errorf("写入条目 %d: %w", ids[i], err)
 		}
@@ -671,7 +671,7 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 		var tagsJSON []byte
 		if err := rows.Scan(&sub.ID, &sub.Source, &sub.SourceRef, &sub.Type, &sub.Name, &sub.NameCN, &sub.Date, &sub.Platform, &sub.Rank,
 			&sub.Score, &sub.RatingTotal, &sub.RawScore, &sub.RawRatingTotal, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
-			&sub.NSFW, &sub.MetaTags, &sub.Image, &sub.TagsTotal, &sub.Locked, &sub.FetchedAt, &tagsJSON); err != nil {
+			&sub.NSFW, &sub.MetaTags, &sub.Image, &sub.Summary, &sub.TagsTotal, &sub.Locked, &sub.FetchedAt, &tagsJSON); err != nil {
 			return out, err
 		}
 		if len(tagsJSON) > 0 {

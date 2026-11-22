@@ -100,7 +100,7 @@ func TestTMDBDetailMovie(t *testing.T) {
 		if path != "/movie/603" {
 			t.Errorf("路径异常 %s", path)
 		}
-		if q.Get("append_to_response") != "credits" || q.Get("language") != "zh-CN" {
+		if q.Get("language") != "zh-CN" {
 			t.Errorf("详情参数异常: %s", q.Encode())
 		}
 		return http.StatusOK, `{
@@ -115,40 +115,19 @@ func TestTMDBDetailMovie(t *testing.T) {
 					{"name":"某编剧","job":"Screenplay"}]}
 		}`
 	})
-	d, err := tr.Detail(context.Background(), "movie/603")
+	rec, err := tr.FetchRecord(context.Background(), "movie/603")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Title != "黑客帝国" || d.SourceRef != "movie/603" || d.Score != 8.2 || d.ScoreCount != 100 {
-		t.Fatalf("详情基础字段异常: %+v", d)
+	if rec.SourceRef != "movie/603" || rec.Score != 8.2 || rec.RatingTotal != 100 || rec.NameCN != "黑客帝国" {
+		t.Fatalf("单条记录基础字段异常: %+v", rec)
 	}
-	if d.Image != "https://image.tmdb.org/t/p/w500/abc.jpg" || d.Backdrop != "https://image.tmdb.org/t/p/w780/bg.jpg" {
-		t.Fatalf("图片异常: %q %q", d.Image, d.Backdrop)
+	if rec.Image != "https://image.tmdb.org/t/p/w500/abc.jpg" {
+		t.Fatalf("海报异常: %q", rec.Image)
 	}
-	if d.Summary != "overview 文本" {
-		t.Fatalf("简介未清理标签: %q", d.Summary)
-	}
-	if d.Runtime != 136 || d.Episodes != 0 {
-		t.Fatalf("片长/集数异常: %d %d", d.Runtime, d.Episodes)
-	}
-	lookup := map[string]string{}
-	for _, f := range d.Facts {
-		lookup[f.K] = f.V
-	}
-	if lookup["导演"] != "Lana Wachowski / Lilly Wachowski" {
-		t.Fatalf("导演聚合异常: %q", lookup["导演"])
-	}
-	if lookup["编剧"] != "某编剧" {
-		t.Fatalf("编剧异常: %q", lookup["编剧"])
-	}
-	if lookup["主演"] != "Keanu Reeves / Carrie-Anne Moss" {
-		t.Fatalf("主演异常: %q", lookup["主演"])
-	}
-	if lookup["制片国家/地区"] != "美国" || lookup["IMDb"] != "tt0133093" || lookup["状态"] != "已完结" {
-		t.Fatalf("事实行异常: %v", lookup)
-	}
-	if d.Link != "https://www.themoviedb.org/movie/603?language=zh-CN" {
-		t.Fatalf("外链异常: %q", d.Link)
+	// 简介随抓取入库（详情只读库）：StripText 清理内联标记
+	if rec.Summary != "overview 文本" {
+		t.Fatalf("简介未清理标签: %q", rec.Summary)
 	}
 }
 
@@ -188,7 +167,7 @@ func TestTMDBNotConfigured(t *testing.T) {
 	if tr.Configured() {
 		t.Fatal("无 key 应为未配置")
 	}
-	if _, err := tr.Detail(context.Background(), "movie/1"); err != ErrNotConfigured {
+	if _, err := tr.FetchRecord(context.Background(), "movie/1"); err != ErrNotConfigured {
 		t.Fatalf("未配置应返回 ErrNotConfigured, 实际 %v", err)
 	}
 	if err := tr.HarvestFull(&Scope{Ctx: context.Background()}); err != ErrNotConfigured {
@@ -200,10 +179,10 @@ func TestTMDBUpstreamError(t *testing.T) {
 	tr := newTMDBTest(t, "k-test", func(t *testing.T, path string, q url.Values) (int, string) {
 		return http.StatusNotFound, `{"status_message":"Not found"}`
 	})
-	if _, err := tr.Detail(context.Background(), "movie/999"); err != ErrNotFound {
+	if _, err := tr.FetchRecord(context.Background(), "movie/999"); err != ErrNotFound {
 		t.Fatalf("404 应映射 ErrNotFound, 实际 %v", err)
 	}
-	if _, err := tr.Detail(context.Background(), strings.Repeat("x", 3)); err == nil {
+	if _, err := tr.FetchRecord(context.Background(), strings.Repeat("x", 3)); err == nil {
 		t.Fatal("非法 ref 应报错")
 	}
 }

@@ -192,6 +192,10 @@ func (i *ITunes) FetchRecord(ctx context.Context, ref string) (store.Subject, er
 	}
 	nsfw := advisoryNSFW.MatchString(r.Advisory)
 	date := NormalizeDate(r.ReleaseDate)
+	summary := r.LongDesc
+	if summary == "" {
+		summary = r.ShortDesc
+	}
 	return store.Subject{
 		Source:      itunesSpec.ID,
 		SourceRef:   strconv.Itoa(r.TrackID),
@@ -204,53 +208,10 @@ func (i *ITunes) FetchRecord(ctx context.Context, ref string) (store.Subject, er
 		RatingTotal: 0,
 		NSFW:        nsfw,
 		Image:       itunesArtwork(r.ArtworkURL100),
+		Summary:     StripText(summary),
 		MetaTags:    []string{},
 		TagsTotal:   0,
 		Tags:        truncateTags([]string{r.PrimaryGenre}),
-	}, nil
-}
-
-// Detail 取 iTunes 归一化详情（/lookup?id=...&country=tw）。
-func (i *ITunes) Detail(ctx context.Context, ref string) (*Detail, error) {
-	r, err := i.lookup(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
-	summary := r.LongDesc
-	if summary == "" {
-		summary = r.ShortDesc
-	}
-	facts := make([]Fact, 0, 6)
-	if r.ArtistName != "" {
-		facts = append(facts, Fact{K: "导演", V: r.ArtistName}) // 电影条目 artistName 即导演
-	}
-	if r.PrimaryGenre != "" {
-		facts = append(facts, Fact{K: "类型", V: r.PrimaryGenre})
-	}
-	if r.Advisory != "" {
-		facts = append(facts, Fact{K: "分级", V: r.Advisory})
-	}
-	if ms := r.TrackTimeMs; ms > 0 {
-		facts = append(facts, Fact{K: "片长", V: fmt.Sprintf("%d 分钟", ms/60000)})
-	}
-	if d := NormalizeDate(r.ReleaseDate); d != "" {
-		facts = append(facts, Fact{K: "上映", V: d})
-	}
-	runtime := 0
-	if r.TrackTimeMs > 0 {
-		runtime = int(r.TrackTimeMs / 60000)
-	}
-	return &Detail{
-		Source:    itunesSpec.ID,
-		SourceRef: strconv.Itoa(r.TrackID),
-		Title:     r.TrackName,
-		Date:      NormalizeDate(r.ReleaseDate),
-		Image:     itunesArtwork(r.ArtworkURL100),
-		Summary:   StripText(summary),
-		Runtime:   runtime,
-		Tags:      []string{r.PrimaryGenre},
-		Facts:     facts,
-		Link:      r.TrackViewURL,
 	}, nil
 }
 

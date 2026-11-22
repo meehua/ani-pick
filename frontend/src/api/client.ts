@@ -1,6 +1,6 @@
 import type {
   AdminOverview, AdminSettings, BgmCharacter, BgmEpisodeList, BgmPerson, BgmRelation,
-  BgmSubject, BgmUser, CrawlState, ExtDetail, MetaResponse, MetricsSnapshot,
+  BgmSubject, BgmUser, CrawlState, MetaResponse, MetricsSnapshot,
   Run, SearchResult, Subject, TagStat,
 } from './types'
 import { endpointCandidates, getActiveId, imageBase, recordUsedEndpoint, type Endpoint } from '../net/endpoints'
@@ -119,9 +119,6 @@ export function searchSubjects(params: SearchParams, signal?: AbortSignal): Prom
 export const getMeta = () => apiGet<MetaResponse>('/api/meta')
 export const getSubjectIndex = (id: number, signal?: AbortSignal) =>
   apiGet<Subject>(`/api/subjects/${id}`, signal)
-// 扩展源详情代理：上游 key 与限速留在服务端，bgm 条目不走此端点
-export const getSubjectExtDetail = (id: number, signal?: AbortSignal) =>
-  apiGet<ExtDetail>(`/api/subjects/${id}/detail`, signal)
 export const getTags = (q: string, types: number[], limit = 30, signal?: AbortSignal) => {
   const p = new URLSearchParams({ q, limit: String(limit) })
   if (types.length) p.set('types', types.join(','))
