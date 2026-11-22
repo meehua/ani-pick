@@ -131,13 +131,15 @@ func (s *Server) buildOverview(ctx context.Context, snap cfgSnapshot) ([]byte, e
 			enabled = v.Enabled
 		}
 		harvesters = append(harvesters, map[string]any{
-			"source":     h.Source(),
-			"label":      h.Label(),
-			"types":      h.Types(),
-			"configured": h.Configured(),
-			"enabled":    enabled,
-			"priority":   store.SourcePriority(h.Source(), srcCfg),
-			"stale":      staleBySource[h.Source()],
+			"source":       h.Source(),
+			"label":        h.Label(),
+			"types":        h.Types(),
+			"configured":   h.Configured(),
+			"enabled":      enabled,
+			"priority":     store.SourcePriority(h.Source(), srcCfg),
+			"stale":        staleBySource[h.Source()],
+			"match_rows":   stats.SourceMatch[h.Source()].Rows,
+			"match_merged": stats.SourceMatch[h.Source()].Merged,
 		})
 	}
 	sort.SliceStable(harvesters, func(i, j int) bool {

@@ -79,6 +79,8 @@ export interface SubjectSourceRow {
   /** 该来源自己的原始评分（合成评分在主行上，单独展示） */
   score: number
   rating_total: number
+  /** 该行的评分分布（1~10 分十档人数；空/缺 = 该源无分档数据） */
+  dist?: number[]
   /** 该来源官方站点的条目外链 */
   url: string
   /** 该行自己的标题/平台/日期/封面（区分同组多行，如剧场版与 TV 各一行） */
@@ -355,6 +357,9 @@ export interface HarvesterInfo {
   priority?: number
   /** 该源超过自己有效保留期的条目数（新鲜度状态，主行可见） */
   stale?: number
+  /** 多源匹配度：该源行数与已并入多源作品组的行数（匹配率 = merged/rows） */
+  match_rows?: number
+  match_merged?: number
 }
 
 export interface AdminOverview {

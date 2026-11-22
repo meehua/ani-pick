@@ -218,6 +218,13 @@ export function CrawlPanel({
     return m
   }, [overview])
 
+  // 每源多源匹配度（行数与已并入多源作品组的行数，匹配率 = merged/rows）
+  const matchBySource = React.useMemo(() => {
+    const m = new Map<string, { rows: number; merged: number }>()
+    for (const h of overview?.harvesters ?? []) m.set(h.source, { rows: h.match_rows ?? 0, merged: h.match_merged ?? 0 })
+    return m
+  }, [overview])
+
   const bgmID = nativeSource()?.id
   const globalTTL = crawl?.refresh_ttl_days ?? 0
   // 源有效保留期 = 源覆盖 ?? 全局默认（与后端同一套取值口径）
@@ -698,6 +705,7 @@ export function CrawlPanel({
           const modes = sourceModes(id)
           const run = overview ? latestRunFor(overview.runs, id) : undefined
           const stale = staleBySource.get(id) ?? 0
+          const match = matchBySource.get(id)
           // 抓取按钮禁用条件：有任务在跑；扩展源还需凭据已配置且设置启用中
           const crawlBlocked =
             !!crawler?.running || (!isBgm && (!meta?.configured || !v.enabled))
@@ -748,6 +756,15 @@ export function CrawlPanel({
                       title={`超过保留期（${effectiveTTL(id)} 天${(v.refresh_ttl_days ?? 0) > 0 ? '，本源覆盖' : '，全局默认'}）的条目数`}
                     >
                       过期 {stale}
+                    </Badge>
+                  )}
+                  {match && match.rows > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] text-muted-foreground"
+                      title="该源行数与已并入多源作品组的行数（匹配率 = merged/rows）"
+                    >
+                      多源匹配率 {Math.round((match.merged / match.rows) * 100)}%（{match.merged}/{match.rows}）
                     </Badge>
                   )}
                 </div>

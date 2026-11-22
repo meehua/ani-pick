@@ -82,6 +82,8 @@ export interface ScoreVariant {
   url: string
   score: number
   ratingTotal: number
+  /** 该行的评分分布（1~10 分十档人数；空 = 该源无分档数据） */
+  dist?: number[]
   title: string
   variant: string
 }
@@ -103,6 +105,7 @@ export function groupScoreRows(sources: SubjectSourceRow[]): ScoreGroup[] {
       url: row.url,
       score: row.score,
       ratingTotal: row.rating_total,
+      dist: row.dist,
       title: row.name_cn || row.name || '',
       variant: variantOf(row),
     })

@@ -219,6 +219,7 @@ export function SubjectHero({
                         <b className="num font-medium text-(--stage-fg)">
                           {r.score > 0 ? r.score.toFixed(1) : '—'}
                         </b>
+                        {r.dist && r.dist.some(n => n > 0) && <DistBar dist={r.dist} />}
                       </a>
                     </Fragment>
                   ))}
@@ -288,5 +289,22 @@ export function SubjectHero({
         </div>
       </div>
     </DarkStage>
+  )
+}
+
+// DistBar 十档评分人数的迷你分布条（1~10 分各档，相对最高档等比高度）；
+// 无数据的源不渲染（调用方判断）。
+function DistBar({ dist }: { dist: number[] }) {
+  const max = Math.max(...dist, 1)
+  return (
+    <span className="mx-0.5 flex h-2.5 w-12 items-end gap-px" aria-hidden>
+      {dist.map((n, i) => (
+        <span
+          key={i}
+          className="flex-1 bg-(--stage-fg)/35"
+          style={{ height: n > 0 ? `${Math.max(20, Math.round((n / max) * 100))}%` : '8%' }}
+        />
+      ))}
+    </span>
   )
 }
