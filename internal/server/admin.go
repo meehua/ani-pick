@@ -301,17 +301,39 @@ func (s *Server) handleAdminPutSettings(w http.ResponseWriter, r *http.Request) 
 	s.invalidateOverview()
 	// 评分权重可能已变化：异步全量重算合成评分（不阻塞保存响应），
 	// 重算完成后再失效查询缓存，保证公开查询读到合成后的新值。
-	go func() {
-		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if _, err := s.store.SynthesizeScores(sctx); err != nil {
-			slog.Error("评分重算失败", "err", err)
-			return
-		}
-		s.invalidateQueryCaches()
-		s.invalidateOverview()
-	}()
+	s.resynthesizeAsync()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "updated_at": next.UpdatedAt})
+}
+
+// resynthesizeAsync 保存设置后的评分全量重算（异步，不阻塞响应）。
+// 并发合并：同一时刻只跑一轮，进行中的保存只置待重算标记，当前轮结束后补算
+// 一轮——分块按当前权重快照逐块读，本轮跑到一半改的权重，未覆盖的块要补算。
+// 不合并的代价生产实测过：十几次保存 = 十几个全量重算并发压库，互相死锁、
+// 管理概览被拖到 35 秒。
+func (s *Server) resynthesizeAsync() {
+	if !s.synthMu.TryLock() {
+		s.synthQueued.Store(true)
+		slog.Info("评分全量重算进行中，本次保存合并到当前轮结束后补算")
+		return
+	}
+	go func() {
+		defer s.synthMu.Unlock()
+		for {
+			sctx, cancel := context.WithTimeout(context.Background(), store.SynthesizeOverallTimeout)
+			_, err := s.store.SynthesizeScores(sctx)
+			cancel()
+			if err != nil {
+				slog.Error("评分重算失败", "err", err)
+			} else {
+				// 重算落库后再失效缓存，公开查询回源读到的就是合成后的新值
+				s.invalidateQueryCaches()
+				s.invalidateOverview()
+			}
+			if !s.synthQueued.Swap(false) {
+				return
+			}
+		}
+	}()
 }
 
 // handleAdminTestCredential 按源分发凭据校验：哪些源支持校验由登记表

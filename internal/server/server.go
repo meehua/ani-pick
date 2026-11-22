@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"anipick/internal/bgm"
@@ -58,6 +59,11 @@ type Server struct {
 
 	pageMu    sync.Mutex
 	pageCache map[string]cachedJSON
+
+	// 评分全量重算的并发合并：同一时刻只跑一轮，进行中的保存只置待重算标记，
+	// 当前轮结束后补算一轮（分块按当前权重快照逐块读，中途改的权重需要补算）。
+	synthMu     sync.Mutex
+	synthQueued atomic.Bool
 
 	// 标签候选与条目详情的结果缓存（数据只在抓取/管理操作后变化）
 	tagMu       sync.Mutex

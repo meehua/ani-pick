@@ -962,11 +962,16 @@ func (s *Store) MarkFailed(ctx context.Context, id int64) error {
 	return err
 }
 
+// pruneStalePred 全量清理的旧条目判定：受影响组收集与 DELETE 共用同一谓词，
+// 两处口径不许漂移。
+const pruneStalePred = `source = $1 AND type = ANY($2) AND (last_run_id IS NULL OR last_run_id <> $3)`
+
 // Prune 删除本轮全量抓取未覆盖的条目（仅限指定类型）。
 // 只清 bgm：type=2 的动画如今混有 mal/anilist 行，必须按 source 隔离，
 // 否则 bgm 全量清理会把扩展源动画一并删掉。
 // 若被清理的 bgm 行是多源作品组的主行（锚点），先把组重排到最优的扩展源行上
-// （作品组由扩展源继续存活），再执行删除。
+// （作品组由扩展源继续存活），再执行删除；删除改变组内成员构成，受影响组
+// 在同一事务内重算合成评分。
 func (s *Store) Prune(ctx context.Context, runID int64, types []int) (int64, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -977,13 +982,14 @@ func (s *Store) Prune(ctx context.Context, runID int64, types []int) (int64, err
 	// 待清理且锚定了扩展源的 bgm 主行 → 其组解散到最优扩展源行
 	rows, err := tx.Query(ctx, `
 		SELECT DISTINCT s.work_id FROM subjects s
-		WHERE s.source = $1 AND s.type = ANY($2) AND (s.last_run_id IS NULL OR s.last_run_id <> $3)
+		WHERE s.`+pruneStalePred+`
 			AND EXISTS (SELECT 1 FROM subjects x WHERE x.work_id = s.work_id AND x.source <> $1)`,
 		registry.SourceBGM, types, runID)
 	if err != nil {
 		return 0, err
 	}
 	var anchored []int64
+	var reanchored []int64
 	for rows.Next() {
 		var w int64
 		if err := rows.Scan(&w); err != nil {
@@ -1010,14 +1016,37 @@ func (s *Store) Prune(ctx context.Context, runID int64, types []int) (int64, err
 		if _, err := tx.Exec(ctx, `UPDATE subjects SET work_id = $1 WHERE work_id = $2`, newPrimary, w); err != nil {
 			return 0, err
 		}
+		reanchored = append(reanchored, newPrimary)
 	}
 
-	tag, err := tx.Exec(ctx, `
-		DELETE FROM subjects
-		WHERE source = $1 AND type = ANY($2) AND (last_run_id IS NULL OR last_run_id <> $3)`,
+	// 受影响组收集（先于删除取组）：被删行所在组的合成评分随删除变化
+	rows, err = tx.Query(ctx, `SELECT DISTINCT work_id FROM subjects WHERE `+pruneStalePred,
 		registry.SourceBGM, types, runID)
 	if err != nil {
 		return 0, err
+	}
+	affected := reanchored
+	for rows.Next() {
+		var w int64
+		if err := rows.Scan(&w); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		affected = append(affected, w)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	tag, err := tx.Exec(ctx, `DELETE FROM subjects WHERE `+pruneStalePred,
+		registry.SourceBGM, types, runID)
+	if err != nil {
+		return 0, err
+	}
+	// 删除后的组员构成上重算合成评分（重指后旧组 id 已无行，合成自动跳过）
+	if err := synthesizeFor(ctx, tx, affected); err != nil {
+		return 0, fmt.Errorf("清理后重算合成评分: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
@@ -1094,14 +1123,33 @@ func (s *Store) RecomputeTagUsage(ctx context.Context) error {
 	return nil
 }
 
-// DeleteSubject 从索引中移除单个条目。
+// DeleteSubject 从索引中移除单个条目。被删行若为组主行，整组重指到剩余最优
+// 成员（组继续存活，不悬空）；受影响组在同一事务内重算合成评分。
 func (s *Store) DeleteSubject(ctx context.Context, id int64) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM subjects WHERE id = $1`, id)
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var workID int64
+	err = tx.QueryRow(ctx, `SELECT work_id FROM subjects WHERE id = $1`, id).Scan(&workID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
 	}
-	return nil
+	if _, err := tx.Exec(ctx, `DELETE FROM subjects WHERE id = $1`, id); err != nil {
+		return err
+	}
+	// 空组（单人组删空）安全返回原值；删主行时整组重指到剩余最优成员
+	primary, err := recomputeGroupPrimary(ctx, tx, workID)
+	if err != nil {
+		return fmt.Errorf("重排作品组 %d: %w", workID, err)
+	}
+	if err := synthesizeFor(ctx, tx, []int64{primary}); err != nil {
+		return fmt.Errorf("删除后重算合成评分: %w", err)
+	}
+	return tx.Commit(ctx)
 }

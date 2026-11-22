@@ -219,17 +219,12 @@ func (c *Crawler) run(ctx context.Context, runID int64, mode, trigger, source st
 	extTouched := false // 扩展源是否写入过条目（决定收尾是否重算标签热度）
 
 	defer func() {
-		// 评分合成在缓存失效之前完成：公开查询重新回源时读到的就是合成后的值
-		sctx, scancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		if _, err := c.st.SynthesizeScores(sctx); err != nil {
-			slog.Error("评分合成失败", "run", runID, "err", err)
-		}
-		scancel()
 		c.mu.Lock()
 		c.state.Running = false
 		c.cancel = nil
 		c.mu.Unlock()
-		// 失败/取消同样可能已写入部分条目（增量逐批提交），一律失效查询缓存
+		// 失败/取消同样可能已写入部分条目（增量逐批提交），一律失效查询缓存；
+		// 评分合成不在这里做：写入/清理/删除各写路径已在自身事务内按组收口
 		if c.OnRunFinished != nil {
 			c.OnRunFinished()
 		}
@@ -665,8 +660,11 @@ func (c *Crawler) RematchWorks(ctx context.Context) (store.RematchStats, error) 
 	if err != nil {
 		return stats, err
 	}
-	// 组归并/重排后按当前权重重算合成评分
-	if _, err := c.st.SynthesizeScores(ctx); err != nil {
+	// 组归并/重排后按当前权重重算合成评分：收尾动作不随请求取消
+	//（生产 169k 行全量重算实测 7 分半），独立 context 给足整体超时
+	sctx, scancel := context.WithTimeout(context.Background(), store.SynthesizeOverallTimeout)
+	defer scancel()
+	if _, err := c.st.SynthesizeScores(sctx); err != nil {
 		return stats, err
 	}
 	return stats, nil
