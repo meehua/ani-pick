@@ -17,7 +17,8 @@ import (
 )
 
 // gzip 相关常量：过小的响应不值得压缩（gzip 头尾开销可能超过收益）。
-const minCompressSize = 860
+// minCompressSizeDefault 是压缩阈值的默认值（运行期设置 min_compress_bytes）。
+const minCompressSizeDefault = 860
 
 var gzipPool = sync.Pool{
 	New: func() any { w := gzip.NewWriter(io.Discard); return w },
@@ -107,6 +108,8 @@ func acceptsGzip(ae string) bool {
 // 压缩决策基于已设置的响应头（Content-Type / Content-Length / Content-Range），
 // 因此与下游是文件服务还是 JSON 编码无关。
 type gzipWriter struct {
+	minCompress int
+
 	http.ResponseWriter
 	gz          *gzip.Writer
 	trace       *db.RequestTrace
@@ -127,7 +130,7 @@ func (g *gzipWriter) WriteHeader(code int) {
 		// 范围响应压缩会破坏 Range 语义
 	case code == http.StatusNoContent || code == http.StatusNotModified:
 	case !compressibleType(h.Get("Content-Type")):
-	case h.Get("Content-Length") != "" && smallBody(h.Get("Content-Length")):
+	case h.Get("Content-Length") != "" && smallBody(h.Get("Content-Length"), g.minCompress):
 	default:
 		h.Del("Content-Length")
 		h.Set("Content-Encoding", "gzip")
@@ -137,9 +140,9 @@ func (g *gzipWriter) WriteHeader(code int) {
 }
 
 // smallBody 判断声明的响应体是否小于压缩阈值。
-func smallBody(contentLength string) bool {
+func smallBody(contentLength string, minCompress int) bool {
 	n, err := strconv.Atoi(contentLength)
-	return err == nil && n < minCompressSize
+	return err == nil && n < minCompress
 }
 
 func (g *gzipWriter) Write(b []byte) (int, error) {
@@ -182,7 +185,11 @@ func (s *Server) gzipResponse(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		gw := &gzipWriter{ResponseWriter: w, trace: db.TraceFrom(r.Context())}
+		mc := s.cfg.minCompressBytes
+		if mc <= 0 {
+			mc = minCompressSizeDefault // 测试或旧快照未填时落默认
+		}
+		gw := &gzipWriter{ResponseWriter: w, trace: db.TraceFrom(r.Context()), minCompress: mc}
 		defer func() {
 			if gw.gz != nil {
 				// Close 冲刷剩余字节与校验尾；panic 时也保证流完整

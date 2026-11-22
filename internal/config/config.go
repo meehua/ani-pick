@@ -1,4 +1,12 @@
 // Package config 负责基础参数装配：先读 .env，再用真实环境变量覆盖。
+//
+// 这里只保留两类参数：
+//   - 引导期专用：进程怎么起、连哪个库、管理员初始密码、加密密钥；
+//   - 基础设施：连接池生命周期/健康检查、HTTP 服务超时——与部署形态绑定，
+//     改了要重启，env 是唯一正确归属。
+//
+// 业务相关的可热改参数（抓取节奏、数据源凭据、出站网络、真实 IP 识别等）
+// 全部在管理后台调整并存数据库 settings 表，这里不再提供环境变量。
 package config
 
 import (
@@ -8,60 +16,31 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config 是进程启动所需的全部基础参数。
-// 与业务相关的可热改参数（抓取节奏、凭据等）保存在数据库 settings 表里，
-// 这里只提供首次启动的种子值与环境级覆盖。
 type Config struct {
 	Addr          string
 	DatabaseURL   string
 	AdminPassword string
 	Secret        string // 用于加密数据库内的敏感设置（可选）
-	BGM           BGM
-	Crawl         CrawlDefaults
-	Net           Net
 	EnvFile       string
 	Debug         bool
-	// ClientIPHeader 是客户端真实 IP 的请求头名（如 CF-Connecting-IP），
-	// 站点经 Cloudflare/反代暴露时配置；仅当 TCP 对端来自 TrustedProxyCIDRs 时才读头。
-	ClientIPHeader string
-	// TrustedProxyCIDRs 是可信反代的网段列表（逗号分隔 CIDR）；
-	// 只有对端在此列表内才采信 ClientIPHeader，防止伪造头绕过限流。
-	TrustedProxyCIDRs string
+
 	// 连接池规格（默认按 1GB 内存机校准）：换机器时按内存调整。
 	DbMaxConns int
 	DbMinConns int
-}
+	// 连接池生命周期与健康检查（基础设施参数；默认值保持既有行为）。
+	DbConnLifetime      time.Duration // 连接最长存活；默认 1h
+	DbConnIdleTime      time.Duration // 空闲回收；默认 0 = 不按空闲回收（保持既有行为）
+	DbHealthCheckPeriod time.Duration // 健康检查周期；默认 30s
 
-// Net 控制服务端出站网络（仅抓取使用）：DoH 解析与 ECH。
-type Net struct {
-	DoH          bool
-	ECH          bool
-	DoHEndpoints []string
-	// EgressProxy 仅用于服务端抓取（http/https/socks5），用户请求永不经过服务端。
-	EgressProxy string
-}
-
-type BGM struct {
-	Token  string
-	Cookie string
-	UA     string
-}
-
-// CrawlDefaults 是写入数据库的初始抓取配置。
-type CrawlDefaults struct {
-	Types             []int
-	PageSize          int
-	DelayMS           int
-	RequestTimeoutSec int
-	RefreshTTLDays    int
-	RefreshBatch      int
-	IncrementalPages  int
-	IncrementalMin    int
-	AutoIncremental   bool
-	AutoRefresh       bool
-	PruneOnFull       bool
+	// HTTP 服务超时（默认值与既有写死值一致：纯暴露，便于部署时按反代形态调整）。
+	HTTPReadHeaderTimeout time.Duration // 请求头读取超时（慢连接防护）
+	HTTPReadTimeout       time.Duration // 请求体读取超时
+	HTTPWriteTimeout      time.Duration // 响应写出超时
+	HTTPIdleTimeout       time.Duration // 空闲连接超时
 }
 
 // Default 返回内置默认值（不读环境）。
@@ -70,27 +49,16 @@ func Default() Config {
 		Addr:          ":8787",
 		DatabaseURL:   "postgres://ani_pick:ani_pick@127.0.0.1:5432/ani_pick?sslmode=disable",
 		AdminPassword: "anipick",
-		BGM: BGM{
-			UA: "AniPick/1.0 (+https://github.com/bangumi; local indexer)",
-		},
-		Net: Net{
-			DoH:          true,
-			ECH:          true,
-			DoHEndpoints: []string{"https://dns.alidns.com/resolve", "https://1.1.1.1/dns-query"},
-		},
-		Crawl: CrawlDefaults{
-			Types:             []int{1, 2, 3, 4, 6},
-			PageSize:          100,
-			DelayMS:           350,
-			RequestTimeoutSec: 40,
-			RefreshTTLDays:    30,
-			RefreshBatch:      300,
-			IncrementalPages:  10,
-			IncrementalMin:    360,
-			AutoIncremental:   true,
-			AutoRefresh:       true,
-			PruneOnFull:       true,
-		},
+
+		DbMaxConns:            12,
+		DbMinConns:            2,
+		DbConnLifetime:        time.Hour,
+		DbConnIdleTime:        0, // 既有行为：不按空闲回收
+		DbHealthCheckPeriod:   30 * time.Second,
+		HTTPReadHeaderTimeout: 10 * time.Second,
+		HTTPReadTimeout:       30 * time.Second,
+		HTTPWriteTimeout:      120 * time.Second,
+		HTTPIdleTimeout:       90 * time.Second,
 	}
 }
 
@@ -116,40 +84,32 @@ func Load() (Config, error) {
 	c.Secret = env("ANIPICK_SECRET", c.Secret)
 	c.Debug = envBool("ANIPICK_DEBUG", c.Debug)
 
-	c.BGM.Token = env("ANIPICK_BGM_TOKEN", c.BGM.Token)
-	c.BGM.Cookie = env("ANIPICK_BGM_COOKIE", c.BGM.Cookie)
-	c.BGM.UA = env("ANIPICK_BGM_UA", c.BGM.UA)
-
-	if v := os.Getenv("ANIPICK_CRAWL_TYPES"); v != "" {
-		types, err := parseTypes(v)
-		if err != nil {
-			return c, fmt.Errorf("ANIPICK_CRAWL_TYPES: %w", err)
-		}
-		c.Crawl.Types = types
-	}
-	c.Crawl.PageSize = envInt("ANIPICK_CRAWL_PAGE_SIZE", c.Crawl.PageSize)
-	c.Crawl.DelayMS = envInt("ANIPICK_CRAWL_DELAY_MS", c.Crawl.DelayMS)
-	c.Crawl.RequestTimeoutSec = envInt("ANIPICK_BGM_TIMEOUT_SEC", c.Crawl.RequestTimeoutSec)
-	c.Crawl.RefreshTTLDays = envInt("ANIPICK_REFRESH_TTL_DAYS", c.Crawl.RefreshTTLDays)
-	c.Crawl.RefreshBatch = envInt("ANIPICK_REFRESH_BATCH", c.Crawl.RefreshBatch)
-	c.Crawl.IncrementalPages = envInt("ANIPICK_INCREMENTAL_PAGES", c.Crawl.IncrementalPages)
-	c.Crawl.IncrementalMin = envInt("ANIPICK_INCREMENTAL_INTERVAL_MIN", c.Crawl.IncrementalMin)
-	c.Crawl.AutoIncremental = envBool("ANIPICK_AUTO_INCREMENTAL", c.Crawl.AutoIncremental)
-	c.Crawl.AutoRefresh = envBool("ANIPICK_AUTO_REFRESH", c.Crawl.AutoRefresh)
-	c.Crawl.PruneOnFull = envBool("ANIPICK_PRUNE_ON_FULL", c.Crawl.PruneOnFull)
-
-	c.Net.EgressProxy = env("ANIPICK_EGRESS_PROXY", c.Net.EgressProxy)
-	c.Net.DoH = envBool("ANIPICK_DOH", c.Net.DoH)
-	c.Net.ECH = envBool("ANIPICK_ECH", c.Net.ECH)
-	if v := env("ANIPICK_DOH_ENDPOINTS", ""); v != "" {
-		c.Net.DoHEndpoints = splitList(v)
-	}
-
-	c.ClientIPHeader = env("ANIPICK_CLIENT_IP_HEADER", c.ClientIPHeader)
-	c.TrustedProxyCIDRs = env("ANIPICK_TRUSTED_PROXY_CIDRS", c.TrustedProxyCIDRs)
-
 	c.DbMaxConns = envInt("ANIPICK_DB_MAX_CONNS", c.DbMaxConns)
 	c.DbMinConns = envInt("ANIPICK_DB_MIN_CONNS", c.DbMinConns)
+
+	// 基础设施 duration 参数（Go ParseDuration 格式：90s / 2m / 1h）。
+	var err error
+	if c.DbConnLifetime, err = envDuration("ANIPICK_DB_CONN_LIFETIME", c.DbConnLifetime); err != nil {
+		return c, err
+	}
+	if c.DbConnIdleTime, err = envDuration("ANIPICK_DB_CONN_IDLE_TIME", c.DbConnIdleTime); err != nil {
+		return c, err
+	}
+	if c.DbHealthCheckPeriod, err = envDuration("ANIPICK_DB_HEALTH_CHECK_PERIOD", c.DbHealthCheckPeriod); err != nil {
+		return c, err
+	}
+	if c.HTTPReadHeaderTimeout, err = envDuration("ANIPICK_HTTP_READ_HEADER_TIMEOUT", c.HTTPReadHeaderTimeout); err != nil {
+		return c, err
+	}
+	if c.HTTPReadTimeout, err = envDuration("ANIPICK_HTTP_READ_TIMEOUT", c.HTTPReadTimeout); err != nil {
+		return c, err
+	}
+	if c.HTTPWriteTimeout, err = envDuration("ANIPICK_HTTP_WRITE_TIMEOUT", c.HTTPWriteTimeout); err != nil {
+		return c, err
+	}
+	if c.HTTPIdleTimeout, err = envDuration("ANIPICK_HTTP_IDLE_TIMEOUT", c.HTTPIdleTimeout); err != nil {
+		return c, err
+	}
 
 	return c, nil
 }
@@ -173,6 +133,20 @@ func envInt(key string, def int) int {
 	return n
 }
 
+// envDuration 解析 Go time.ParseDuration 格式的环境变量（90s / 2m / 1h）；
+// 未设置返回默认，设置了解析失败则报错（基础设施参数写错要Fail Fast，不静默吞）。
+func envDuration(key string, def time.Duration) (time.Duration, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(v))
+	if err != nil || d < 0 {
+		return def, fmt.Errorf("%s: 无效时长 %q（示例 90s / 2m / 1h）", key, v)
+	}
+	return d, nil
+}
+
 func envBool(key string, def bool) bool {
 	v, ok := os.LookupEnv(key)
 	if !ok {
@@ -185,48 +159,6 @@ func envBool(key string, def bool) bool {
 		return false
 	}
 	return def
-}
-
-func splitList(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func parseTypes(s string) ([]int, error) {
-	var out []int
-	seen := map[int]bool{}
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		n, err := strconv.Atoi(part)
-		if err != nil || !ValidType(n) {
-			return nil, fmt.Errorf("无效类型 %q（可选 1 书籍 / 2 动画 / 3 音乐 / 4 游戏 / 6 三次元）", part)
-		}
-		if !seen[n] {
-			seen[n] = true
-			out = append(out, n)
-		}
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("至少需要一个类型")
-	}
-	return out, nil
-}
-
-// ValidType 判断是否为 Bangumi 条目类型。
-func ValidType(t int) bool {
-	switch t {
-	case 1, 2, 3, 4, 6:
-		return true
-	}
-	return false
 }
 
 // loadDotEnv 解析 KEY=VALUE 形式的 .env；已存在的真实环境变量优先。

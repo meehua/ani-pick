@@ -91,17 +91,21 @@ func newLimiter() *limiter {
 	return &limiter{entries: map[string]*bucket{}}
 }
 
-// clientIP 返回请求来源 IP。配置了 clientIPHeader（如经 Cloudflare/反代暴露时
-// 取 CF-Connecting-IP）且 TCP 对端在可信网段内时优先使用；否则回退 TCP 对端地址。
+// clientIP 返回请求来源 IP。设置了真实 IP 头（如经 Cloudflare/反代暴露时取
+// CF-Connecting-IP，管理后台「设置 → 限流与安全」可调）且 TCP 对端在可信网段内时
+// 优先使用；否则回退 TCP 对端地址。设置随快照立刷，逐请求生效。
 // 教训（源自 Morikusa 06-security）：XFF 类头可被伪造绕过限流，只有连接来自
 // 可信反代网段才读头；未配置可信网段时对头完全不信。
 func (s *Server) clientIP(r *http.Request) string {
+	s.ipMu.RLock()
+	header, cidrs := s.ipHeader, s.ipTrustedCIDRs
+	s.ipMu.RUnlock()
 	remote := r.RemoteAddr
 	if host, _, err := net.SplitHostPort(remote); err == nil {
 		remote = host
 	}
-	if s.clientIPHeader != "" && s.trustedProxy(remote) {
-		if v := r.Header.Get(s.clientIPHeader); v != "" {
+	if header != "" && trustedProxy(remote, cidrs) {
+		if v := r.Header.Get(header); v != "" {
 			// 兼容 X-Forwarded-For 这类逗号列表头，取第一个（最接近客户端的）
 			if i := strings.IndexByte(v, ','); i >= 0 {
 				v = v[:i]
@@ -114,16 +118,16 @@ func (s *Server) clientIP(r *http.Request) string {
 	return remote
 }
 
-// trustedProxy 判断 TCP 对端是否属于配置的可信反代网段。
-func (s *Server) trustedProxy(remote string) bool {
-	if len(s.trustedCIDRs) == 0 {
+// trustedProxy 判断 TCP 对端是否属于设置声明的可信反代网段。
+func trustedProxy(remote string, cidrs []*net.IPNet) bool {
+	if len(cidrs) == 0 {
 		return false
 	}
 	ip := net.ParseIP(remote)
 	if ip == nil {
 		return false
 	}
-	for _, c := range s.trustedCIDRs {
+	for _, c := range cidrs {
 		if c.Contains(ip) {
 			return true
 		}

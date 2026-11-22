@@ -18,26 +18,36 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Open 建立连接池。maxConns/minConns ≤0 时使用内置默认值（按 1GB 内存机校准），
+// PoolConfig 是连接池的启动期规格（基础设施参数，经 config 从环境读取）。
+type PoolConfig struct {
+	MaxConns          int32         // 最大连接数；≤0 用内置默认（按 1GB 内存机校准）
+	MinConns          int32         // 最小空闲连接；≤0 用内置默认
+	ConnLifetime      time.Duration // 连接最长存活；0 = 不限
+	ConnIdleTime      time.Duration // 空闲回收；0 = 不按空闲回收（既有行为）
+	HealthCheckPeriod time.Duration // 健康检查周期；0 用 pgx 内置默认
+}
+
+// Open 建立连接池。规格 ≤0 的项使用内置默认值（按 1GB 内存机校准），
 // 可经 ANIPICK_DB_MAX_CONNS / ANIPICK_DB_MIN_CONNS 按机器规格调整。
-func Open(ctx context.Context, dsn string, maxConns, minConns int32) (*pgxpool.Pool, error) {
+func Open(ctx context.Context, dsn string, pc PoolConfig) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("解析 ANIPICK_DATABASE_URL: %w", err)
 	}
-	if maxConns <= 0 {
-		maxConns = 12
+	if pc.MaxConns <= 0 {
+		pc.MaxConns = 12
 	}
-	if minConns <= 0 {
-		minConns = 2
+	if pc.MinConns <= 0 {
+		pc.MinConns = 2
 	}
-	if minConns > maxConns {
-		minConns = maxConns
+	if pc.MinConns > pc.MaxConns {
+		pc.MinConns = pc.MaxConns
 	}
-	cfg.MaxConns = maxConns
-	cfg.MinConns = minConns
-	cfg.MaxConnLifetime = time.Hour
-	cfg.HealthCheckPeriod = 30 * time.Second
+	cfg.MaxConns = pc.MaxConns
+	cfg.MinConns = pc.MinConns
+	cfg.MaxConnLifetime = pc.ConnLifetime
+	cfg.MaxConnIdleTime = pc.ConnIdleTime
+	cfg.HealthCheckPeriod = pc.HealthCheckPeriod
 	// 每条 SQL 的耗时进请求链路累积器（管理端性能面板用）
 	cfg.ConnConfig.Tracer = Tracer{}
 

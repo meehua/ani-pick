@@ -5,16 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"anipick/internal/registry"
 )
 
-const subjectColumns = `s.id, s.type, s.name, s.name_cn, COALESCE(to_char(s.date, 'YYYY-MM-DD'), ''),
-	s.platform, s.rank, s.score::float8, s.rating_total, s.wish, s.collect, s.doing, s.on_hold, s.dropped,
+// subjectColumns 是条目查询的列清单（source_ref 为身份内部字段：入扫描、JSON 不外泄）。
+// score/rating_total 是作品组合成值（主行上物化）；raw_* 是该行所属来源的原始值。
+const subjectColumns = `s.id, s.source, s.source_ref, s.type, s.name, s.name_cn, COALESCE(to_char(s.date, 'YYYY-MM-DD'), ''),
+	s.platform, s.rank, s.score::float8, s.rating_total, s.raw_score::float8, s.raw_rating_total, s.wish, s.collect, s.doing, s.on_hold, s.dropped,
 	s.nsfw, s.meta_tags, s.image, s.tags_total, s.locked, s.fetched_at`
 
 // 搜索总数缓存：翻页复用同一 count，上限防止关键词型 key 无界增长。
@@ -32,10 +37,152 @@ type countEntry struct {
 
 func scanSubject(row pgx.Row) (Subject, error) {
 	var sub Subject
-	err := row.Scan(&sub.ID, &sub.Type, &sub.Name, &sub.NameCN, &sub.Date, &sub.Platform, &sub.Rank,
-		&sub.Score, &sub.RatingTotal, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
+	err := row.Scan(&sub.ID, &sub.Source, &sub.SourceRef, &sub.Type, &sub.Name, &sub.NameCN, &sub.Date, &sub.Platform, &sub.Rank,
+		&sub.Score, &sub.RatingTotal, &sub.RawScore, &sub.RawRatingTotal, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
 		&sub.NSFW, &sub.MetaTags, &sub.Image, &sub.TagsTotal, &sub.Locked, &sub.FetchedAt)
 	return sub, err
+}
+
+// resolveIDs 把一批记录解析成最终写入 id 与所属组（身份读写的唯一收口）：
+//   - bgm（Source 为空视为 bgm）：id = 来源主键，source_ref 回填为 id 文本；
+//   - 扩展源：先按 (source, source_ref) 查既有行，缺失的从 subject_ext_id_seq 取号。
+//
+// 返回 ids（写入 id）与 workIDs（既有行所属作品组；新行为 0，由调用方走匹配器）。
+func resolveIDs(ctx context.Context, tx pgx.Tx, recs []Subject) ([]int64, []int64, error) {
+	ids := make([]int64, len(recs))
+	workIDs := make([]int64, len(recs))
+	refsBySource := map[string][]string{}
+	for i := range recs {
+		if recs[i].Source == "" {
+			recs[i].Source = SourceBGM
+		}
+		if recs[i].SourceRef == "" && recs[i].Source == SourceBGM {
+			recs[i].SourceRef = strconv.FormatInt(recs[i].ID, 10)
+		}
+		if recs[i].SourceRef == "" {
+			return nil, nil, fmt.Errorf("条目缺少 source_ref: source=%s name=%q", recs[i].Source, recs[i].Name)
+		}
+		if recs[i].Source == SourceBGM {
+			id, err := strconv.ParseInt(recs[i].SourceRef, 10, 64)
+			if err != nil || id <= 0 {
+				return nil, nil, fmt.Errorf("bgm 条目 id 非法: %q", recs[i].SourceRef)
+			}
+			ids[i] = id
+		} else {
+			ids[i] = -1
+			refsBySource[recs[i].Source] = append(refsBySource[recs[i].Source], recs[i].SourceRef)
+		}
+	}
+	// 扩展源既有身份：一次 IN 查询取回（批量组装，禁循环逐条查）
+	for source, refs := range refsBySource {
+		rows, err := tx.Query(ctx, `SELECT source_ref, id, work_id FROM subjects WHERE source = $1 AND source_ref = ANY($2)`,
+			source, refs)
+		if err != nil {
+			return nil, nil, err
+		}
+		type existing struct {
+			id   int64
+			work int64
+		}
+		found := map[string]existing{}
+		for rows.Next() {
+			var ref string
+			var e existing
+			if err := rows.Scan(&ref, &e.id, &e.work); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			found[ref] = e
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, nil, err
+		}
+		for i := range recs {
+			if ids[i] < 0 && recs[i].Source == source {
+				if e, ok := found[recs[i].SourceRef]; ok {
+					ids[i] = e.id
+					workIDs[i] = e.work // 已存在的行保持原组
+					if e.work == 0 {
+						workIDs[i] = e.id // 迁移前的 0 值自愈：自成一组
+					}
+				}
+			}
+		}
+	}
+	// bgm 行的既有组：一次 IN 查询（新 bgm 行 workIDs 保持 0，走匹配器）
+	var bgmIdx []int
+	for i := range recs {
+		if recs[i].Source == SourceBGM {
+			bgmIdx = append(bgmIdx, i)
+		}
+	}
+	if len(bgmIdx) > 0 {
+		bgmIDs := make([]int64, 0, len(bgmIdx))
+		for _, i := range bgmIdx {
+			bgmIDs = append(bgmIDs, ids[i])
+		}
+		rows, err := tx.Query(ctx, `SELECT id, work_id FROM subjects WHERE id = ANY($1)`, bgmIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		work := map[int64]int64{}
+		for rows.Next() {
+			var id, w int64
+			if err := rows.Scan(&id, &w); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			work[id] = w
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, nil, err
+		}
+		for _, i := range bgmIdx {
+			if w, ok := work[ids[i]]; ok {
+				workIDs[i] = w
+				if w == 0 {
+					workIDs[i] = ids[i] // 迁移前的 0 值自愈：自成一组
+				}
+			}
+		}
+	}
+
+	// 仍缺的：从扩展序列批量取号（1e10 起，与 bgm id 空间隔离）
+	missing := 0
+	for i := range recs {
+		if ids[i] < 0 {
+			missing++
+		}
+	}
+	if missing > 0 {
+		rows, err := tx.Query(ctx, `SELECT nextval('subject_ext_id_seq') FROM generate_series(1, $1)`, missing)
+		if err != nil {
+			return nil, nil, err
+		}
+		seq := make([]int64, 0, missing)
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			seq = append(seq, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, nil, err
+		}
+		n := 0
+		for i := range recs {
+			if ids[i] < 0 {
+				ids[i] = seq[n]
+				n++
+			}
+		}
+	}
+	return ids, workIDs, nil
 }
 
 // UpsertSubjects 在一个事务内写入一页条目（含标签与占比）。
@@ -50,6 +197,11 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 		return 0, 0, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	ids, workIDs, err := resolveIDs(ctx, tx, recs)
+	if err != nil {
+		return 0, 0, err
+	}
 
 	nameSet := map[string]struct{}{}
 	for _, rec := range recs {
@@ -89,21 +241,61 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 		}
 	}
 
-	for _, rec := range recs {
+	// 每条入站记录的归属组：既有行保持原组；新行走匹配器（② ext_key → ③ 启发式），
+	// 拿不准就自成作品。新行并入的组在写入后统一重排资料序；
+	// 所有涉及到的组在写入后重算合成评分。
+	joined := map[int64]struct{}{}  // 新行并入的组：需要重排资料序
+	touched := map[int64]struct{}{} // 涉及到的组：需要重算合成评分
+	for i, rec := range recs {
 		if rec.MetaTags == nil {
 			rec.MetaTags = []string{}
 		}
+		if rec.AltTitles == nil {
+			rec.AltTitles = []string{}
+		}
+		if workIDs[i] == 0 {
+			m := matchRecord{
+				Source: rec.Source,
+				Ref:    rec.SourceRef,
+				Name:   rec.Name,
+				ExtKey: rec.ExtKey,
+				Type:   rec.Type,
+				Date:   rec.Date,
+				Titles: TitleSetOf(rec.Name, rec.NameCN, rec.AltTitles),
+			}
+			w, ambiguous, merr := matchWork(ctx, tx, m)
+			if merr != nil {
+				return inserted, updated, fmt.Errorf("作品匹配 %s/%s: %w", rec.Source, rec.SourceRef, merr)
+			}
+			// 拿不准就拒绝：自成作品（matchWork 内已记警告日志）
+			_ = ambiguous
+			if w > 0 {
+				joined[w] = struct{}{}
+			}
+			workIDs[i] = w // 0 = 独立新作品，work_id = 自己的 id
+			if workIDs[i] == 0 {
+				workIDs[i] = ids[i]
+			}
+		}
+		touched[workIDs[i]] = struct{}{}
 		var isInsert bool
 		err := tx.QueryRow(ctx, `
-			INSERT INTO subjects (id, type, name, name_cn, date, platform, rank, score, rating_total,
-				wish, collect, doing, on_hold, dropped, nsfw, meta_tags, image, tags_total, locked,
-				fail_count, last_run_id, fetched_at, updated_at)
-			VALUES ($1, $2, $3, $4, NULLIF($5, '')::date, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-				$15, $16::text[], $17, $18, $19, 0, $20, now(), now())
+			INSERT INTO subjects (id, source, source_ref, work_id, ext_key, alt_titles, type, name, name_cn, date,
+				platform, rank, score, rating_total, raw_score, raw_rating_total, wish, collect, doing, on_hold, dropped,
+				nsfw, meta_tags, image, tags_total, locked, fail_count, last_run_id, fetched_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, $9, NULLIF($10, '')::date, $11, $12, $13, $14, $15, $16,
+				$17, $18, $19, $20, $21, $22, $23::text[], $24, $25, $26, 0, $27, now(), now())
 			ON CONFLICT (id) DO UPDATE SET
+				source = EXCLUDED.source, source_ref = EXCLUDED.source_ref,
+				ext_key = EXCLUDED.ext_key, alt_titles = EXCLUDED.alt_titles,
+				-- work_id 不随 upsert 改写：既有行保持已归的组（自愈分支见 CASE）
+				work_id = CASE WHEN subjects.work_id = 0 THEN EXCLUDED.work_id ELSE subjects.work_id END,
 				type = EXCLUDED.type, name = EXCLUDED.name, name_cn = EXCLUDED.name_cn,
 				date = EXCLUDED.date, platform = EXCLUDED.platform, rank = EXCLUDED.rank,
-				score = EXCLUDED.score, rating_total = EXCLUDED.rating_total,
+				-- raw_* 永远保存该来源自己的原始值；score 先落回原始值，
+				-- 属于作品组主行的部分由本次写入收尾的合成重算覆盖
+				score = EXCLUDED.raw_score, rating_total = EXCLUDED.raw_rating_total,
+				raw_score = EXCLUDED.raw_score, raw_rating_total = EXCLUDED.raw_rating_total,
 				wish = EXCLUDED.wish, collect = EXCLUDED.collect, doing = EXCLUDED.doing,
 				on_hold = EXCLUDED.on_hold, dropped = EXCLUDED.dropped, nsfw = EXCLUDED.nsfw,
 				meta_tags = EXCLUDED.meta_tags, image = EXCLUDED.image, tags_total = EXCLUDED.tags_total,
@@ -111,11 +303,12 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 				last_run_id = CASE WHEN EXCLUDED.last_run_id > 0 THEN EXCLUDED.last_run_id ELSE subjects.last_run_id END,
 				fetched_at = now(), updated_at = now()
 			RETURNING (xmax = 0)`,
-			rec.ID, rec.Type, rec.Name, rec.NameCN, rec.Date, rec.Platform, rec.Rank, rec.Score,
-			rec.RatingTotal, rec.Wish, rec.Collect, rec.Doing, rec.OnHold, rec.Dropped, rec.NSFW,
-			rec.MetaTags, rec.Image, rec.TagsTotal, rec.Locked, runID).Scan(&isInsert)
+			ids[i], rec.Source, rec.SourceRef, workIDs[i], rec.ExtKey, rec.AltTitles,
+			rec.Type, rec.Name, rec.NameCN, rec.Date, rec.Platform,
+			rec.Rank, rec.Score, rec.RatingTotal, rec.Score, rec.RatingTotal, rec.Wish, rec.Collect, rec.Doing, rec.OnHold,
+			rec.Dropped, rec.NSFW, rec.MetaTags, rec.Image, rec.TagsTotal, rec.Locked, runID).Scan(&isInsert)
 		if err != nil {
-			return inserted, updated, fmt.Errorf("写入条目 %d: %w", rec.ID, err)
+			return inserted, updated, fmt.Errorf("写入条目 %d: %w", ids[i], err)
 		}
 		if isInsert {
 			inserted++
@@ -123,11 +316,12 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 			updated++
 		}
 
-		if _, err := tx.Exec(ctx, `DELETE FROM subject_tags WHERE subject_id = $1`, rec.ID); err != nil {
+		// 标签写入使用解析后的最终 id（扩展源 rec.ID 为 0，身份由 ids[i] 承载）
+		if _, err := tx.Exec(ctx, `DELETE FROM subject_tags WHERE subject_id = $1`, ids[i]); err != nil {
 			return inserted, updated, err
 		}
 		if len(rec.Tags) > 0 {
-			ids := make([]int64, 0, len(rec.Tags))
+			tagIDs2 := make([]int64, 0, len(rec.Tags))
 			votes := make([]int32, 0, len(rec.Tags))
 			pcts := make([]float64, 0, len(rec.Tags))
 			for _, t := range rec.Tags {
@@ -135,19 +329,34 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 				if !ok {
 					continue
 				}
-				ids = append(ids, id)
+				tagIDs2 = append(tagIDs2, id)
 				votes = append(votes, int32(t.Votes))
 				pcts = append(pcts, math.Round(t.Pct*100)/100)
 			}
-			if len(ids) > 0 {
+			if len(tagIDs2) > 0 {
 				if _, err := tx.Exec(ctx, `
 					INSERT INTO subject_tags (subject_id, tag_id, votes, pct)
 					SELECT $1, u.id, u.votes, u.pct FROM unnest($2::bigint[], $3::int[], $4::numeric[]) AS u(id, votes, pct)
-					ON CONFLICT DO NOTHING`, rec.ID, ids, votes, pcts); err != nil {
-					return inserted, updated, fmt.Errorf("写入标签占比 %d: %w", rec.ID, err)
+					ON CONFLICT DO NOTHING`, ids[i], tagIDs2, votes, pcts); err != nil {
+					return inserted, updated, fmt.Errorf("写入标签占比 %d: %w", ids[i], err)
 				}
 			}
 		}
+	}
+
+	// 新行并入既有组后重排资料序：更高优先级源（如 bgm）加入时整组 work_id 单条更新
+	for w := range joined {
+		if _, err := recomputeGroupPrimary(ctx, tx, w); err != nil {
+			return inserted, updated, fmt.Errorf("重排作品 %d: %w", w, err)
+		}
+	}
+	// 涉及到的组重算合成评分（主行 score/rating_total = 组内各源按权重加权）
+	groups := make([]int64, 0, len(touched))
+	for w := range touched {
+		groups = append(groups, w)
+	}
+	if err := synthesizeFor(ctx, tx, groups); err != nil {
+		return inserted, updated, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -188,6 +397,7 @@ func (s *Store) GetSubject(ctx context.Context, id int64) (Subject, error) {
 // SearchQuery 是本站索引检索条件。
 type SearchQuery struct {
 	Keyword     string
+	Source      string // 数据来源（bgm/tmdb/itunes/mal/anilist），空 = 全部来源
 	Types       []int
 	Tags        []string
 	ExcludeTags []string
@@ -255,7 +465,15 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 		return "$" + strconv.Itoa(len(args))
 	}
 
-	conds := []string{"TRUE"}
+	// 作品分组塌缩：每组只出主行（work_id = 组内主行 id；0 视为自成作品）。
+	// 标签/类型/评分/日期等筛选全部作用在主行字段上，语义可预期。
+	conds := []string{"(s.work_id = 0 OR s.id = s.work_id)"}
+
+	// 来源筛选：语义为「该作品组内含此来源的记录」（EXISTS 半连接）；
+	// count 缓存键由 where+args 组成，source 参与其中，不同来源各存各的总数。
+	if q.Source != "" {
+		conds = append(conds, "EXISTS (SELECT 1 FROM subjects g WHERE g.work_id = s.work_id AND g.source = "+ph(q.Source)+")")
+	}
 
 	types := q.Types
 	if len(types) == 1 {
@@ -451,8 +669,8 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 	for rows.Next() {
 		var sub Subject
 		var tagsJSON []byte
-		if err := rows.Scan(&sub.ID, &sub.Type, &sub.Name, &sub.NameCN, &sub.Date, &sub.Platform, &sub.Rank,
-			&sub.Score, &sub.RatingTotal, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
+		if err := rows.Scan(&sub.ID, &sub.Source, &sub.SourceRef, &sub.Type, &sub.Name, &sub.NameCN, &sub.Date, &sub.Platform, &sub.Rank,
+			&sub.Score, &sub.RatingTotal, &sub.RawScore, &sub.RawRatingTotal, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
 			&sub.NSFW, &sub.MetaTags, &sub.Image, &sub.TagsTotal, &sub.Locked, &sub.FetchedAt, &tagsJSON); err != nil {
 			return out, err
 		}
@@ -554,6 +772,7 @@ func (s *Store) MetaTagSuggest(ctx context.Context, typ int, limit int) ([]TagSt
 type Stats struct {
 	Total       int            `json:"total"`
 	ByType      map[string]int `json:"by_type"`
+	BySource    map[string]int `json:"by_source"`
 	Tags        int            `json:"tags"`
 	SubjectTags int            `json:"subject_tags"`
 	LastFetched *time.Time     `json:"last_fetched"`
@@ -562,19 +781,25 @@ type Stats struct {
 }
 
 func (s *Store) Stats(ctx context.Context) (Stats, error) {
-	out := Stats{ByType: map[string]int{}}
+	out := Stats{ByType: map[string]int{}, BySource: map[string]int{}}
 
 	// 六条独立统计查询并行执行：省 IO 等待（总 CPU 不变，都是同一批小聚合）
 	var wg sync.WaitGroup
 	errs := make([]error, 5)
-	wg.Add(5)
+	wg.Add(6) // 来源计数不计入 errs，失败静默
 	go func() {
 		defer wg.Done()
-		errs[0] = s.Pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE nsfw) FROM subjects`).Scan(&out.Total, &out.NSFW)
+		// 总数口径 = 作品数（塌缩到主行）；敏感数同口径只算主行
+		errs[0] = s.Pool.QueryRow(ctx, `
+			SELECT count(*), count(*) FILTER (WHERE nsfw) FROM subjects
+			WHERE work_id = 0 OR id = work_id`).Scan(&out.Total, &out.NSFW)
 	}()
 	go func() {
 		defer wg.Done()
-		rows, err := s.Pool.Query(ctx, `SELECT type, count(*) FROM subjects GROUP BY type`)
+		// 类型计数口径 = 作品数（塌缩到主行；扩展源行与主行同属一个作品，不重复计）
+		rows, err := s.Pool.Query(ctx, `
+			SELECT type, count(*) FROM subjects
+			WHERE work_id = 0 OR id = work_id GROUP BY type`)
 		if err != nil {
 			errs[1] = err
 			return
@@ -589,6 +814,25 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 			out.ByType[strconv.Itoa(t)] = n
 		}
 		errs[1] = rows.Err()
+	}()
+	go func() {
+		defer wg.Done()
+		// 来源计数口径 = 覆盖作品数（DISTINCT work_id；0 值行按自身 id 计）
+		rows, err := s.Pool.Query(ctx, `
+			SELECT source, count(DISTINCT CASE WHEN work_id = 0 THEN id ELSE work_id END)
+			FROM subjects GROUP BY source`)
+		if err != nil {
+			return // 来源计数是展示性信息，失败不影响统计可用性
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var src string
+			var n int
+			if err := rows.Scan(&src, &n); err != nil {
+				return
+			}
+			out.BySource[src] = n
+		}
 	}()
 	go func() {
 		defer wg.Done()
@@ -619,22 +863,36 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	return out, nil
 }
 
-// CountStale 统计超过 TTL 未刷新的条目数量。
-func (s *Store) CountStale(ctx context.Context, ttlDays int, types []int) (int, error) {
+// CountNativeType 统计原生索引某类型的条目数（增量判空：某类型在库为空时，
+// 本轮增量对该类型自动按全量预算跑到底，保证空数据/首次安装不漏条目）。
+func (s *Store) CountNativeType(ctx context.Context, typ int) (int, error) {
+	var n int
+	err := s.Pool.QueryRow(ctx, `SELECT count(*)::int FROM subjects WHERE source = $1 AND type = $2`,
+		registry.SourceBGM, typ).Scan(&n)
+	return n, err
+}
+
+// CountStale 统计超过 TTL 未刷新的条目数量（只算原生索引：扩展源靠重新抓取保持新鲜；
+// 来源维度由登记表常量参数传入，SQL 里不出现来源名字面量）。
+// retryCap 是单条连续失败多少次后暂时跳过（fail_count 由 MarkFailed 累加）。
+func (s *Store) CountStale(ctx context.Context, ttlDays, retryCap int, types []int) (int, error) {
 	if ttlDays < 1 {
 		ttlDays = 1
 	}
 	var n int
 	err := s.Pool.QueryRow(ctx, `
 		SELECT count(*) FROM subjects
-		WHERE fetched_at < now() - ($1::int * interval '1 day')
-			AND NOT locked AND fail_count < 5
-			AND ($2::int[] IS NULL OR cardinality($2::int[]) = 0 OR type = ANY($2))`, ttlDays, types).Scan(&n)
+		WHERE source = $1
+			AND fetched_at < now() - ($2::int * interval '1 day')
+			AND NOT locked AND fail_count < $3
+			AND ($4::int[] IS NULL OR cardinality($4::int[]) = 0 OR type = ANY($4))`,
+		registry.SourceBGM, ttlDays, retryCap, types).Scan(&n)
 	return n, err
 }
 
-// StaleSubjects 返回超过 TTL 未刷新的条目 id，优先刷新有排名的。
-func (s *Store) StaleSubjects(ctx context.Context, ttlDays, limit int, types []int) ([]int64, error) {
+// StaleSubjects 返回超过 TTL 未刷新的原生索引条目 id，优先刷新有排名的。
+// StaleSubjects 列出超过 TTL 未刷新的条目 id（retryCap = 单条连续失败跳过阈值）。
+func (s *Store) StaleSubjects(ctx context.Context, ttlDays, retryCap, limit int, types []int) ([]int64, error) {
 	if ttlDays < 1 {
 		ttlDays = 1
 	}
@@ -643,11 +901,12 @@ func (s *Store) StaleSubjects(ctx context.Context, ttlDays, limit int, types []i
 	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT id FROM subjects
-		WHERE fetched_at < now() - ($1::int * interval '1 day')
-			AND NOT locked AND fail_count < 5
-			AND ($2::int[] IS NULL OR cardinality($2::int[]) = 0 OR type = ANY($2))
+		WHERE source = $1
+			AND fetched_at < now() - ($2::int * interval '1 day')
+			AND NOT locked AND fail_count < $3
+			AND ($4::int[] IS NULL OR cardinality($4::int[]) = 0 OR type = ANY($4))
 		ORDER BY (rank = 0) ASC, rank ASC, fetched_at ASC
-		LIMIT $3`, ttlDays, types, limit)
+		LIMIT $5`, registry.SourceBGM, ttlDays, retryCap, types, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -663,6 +922,36 @@ func (s *Store) StaleSubjects(ctx context.Context, ttlDays, limit int, types []i
 	return ids, rows.Err()
 }
 
+// CountStaleBySource 按源统计超过各自保留期的条目数（一次查询取齐，禁 N+1）。
+// 每个源带自己的有效保留期（源覆盖值 ?? 全局默认），来源清单由登记表声明
+// 的启用中来源构成，SQL 里不出现来源名字面量。扩展源不看 types/fail_count
+// （它们的保鲜方式是整体重抓，行数本身就是「该不该重抓」的判定依据）。
+func (s *Store) CountStaleBySource(ctx context.Context, sources []string, ttls []int) (map[string]int, error) {
+	if len(sources) == 0 || len(sources) != len(ttls) {
+		return map[string]int{}, nil
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT t.src, count(*)::int
+		FROM unnest($1::text[], $2::int[]) AS t(src, ttl)
+		JOIN subjects s ON s.source = t.src
+		WHERE s.fetched_at < now() - make_interval(days => t.ttl)
+		GROUP BY t.src`, sources, ttls)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int, len(sources))
+	for rows.Next() {
+		var src string
+		var n int
+		if err := rows.Scan(&src, &n); err != nil {
+			return nil, err
+		}
+		out[src] = n
+	}
+	return out, rows.Err()
+}
+
 // MarkUnavailable 记录上游不可访问（已删除 / 无权限），保留索引并退避。
 func (s *Store) MarkUnavailable(ctx context.Context, id int64) error {
 	_, err := s.Pool.Exec(ctx, `UPDATE subjects SET locked = TRUE, fail_count = fail_count + 1, updated_at = now() WHERE id = $1`, id)
@@ -675,14 +964,81 @@ func (s *Store) MarkFailed(ctx context.Context, id int64) error {
 }
 
 // Prune 删除本轮全量抓取未覆盖的条目（仅限指定类型）。
+// 只清 bgm：type=2 的动画如今混有 mal/anilist 行，必须按 source 隔离，
+// 否则 bgm 全量清理会把扩展源动画一并删掉。
+// 若被清理的 bgm 行是多源作品组的主行（锚点），先把组重排到最优的扩展源行上
+// （作品组由扩展源继续存活），再执行删除。
 func (s *Store) Prune(ctx context.Context, runID int64, types []int) (int64, error) {
-	tag, err := s.Pool.Exec(ctx, `
-		DELETE FROM subjects
-		WHERE type = ANY($1) AND (last_run_id IS NULL OR last_run_id <> $2)`, types, runID)
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// 待清理且锚定了扩展源的 bgm 主行 → 其组解散到最优扩展源行
+	rows, err := tx.Query(ctx, `
+		SELECT DISTINCT s.work_id FROM subjects s
+		WHERE s.source = $1 AND s.type = ANY($2) AND (s.last_run_id IS NULL OR s.last_run_id <> $3)
+			AND EXISTS (SELECT 1 FROM subjects x WHERE x.work_id = s.work_id AND x.source <> $1)`,
+		registry.SourceBGM, types, runID)
+	if err != nil {
+		return 0, err
+	}
+	var anchored []int64
+	for rows.Next() {
+		var w int64
+		if err := rows.Scan(&w); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		anchored = append(anchored, w)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, w := range anchored {
+		// 主行即将删除：把组重指到最优的扩展源成员（按登记表优先序动态生成
+		// 排序数组——新增源不再改这条 SQL），再连同旧主行一起删
+		var newPrimary int64
+		if err := tx.QueryRow(ctx, `
+			SELECT id FROM subjects
+			WHERE work_id = $1 AND source <> $2
+			ORDER BY array_position($3::text[], source) NULLS LAST, id
+			LIMIT 1`, w, registry.SourceBGM, extSourceOrder()).Scan(&newPrimary); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE subjects SET work_id = $1 WHERE work_id = $2`, newPrimary, w); err != nil {
+			return 0, err
+		}
+	}
+
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM subjects
+		WHERE source = $1 AND type = ANY($2) AND (last_run_id IS NULL OR last_run_id <> $3)`,
+		registry.SourceBGM, types, runID)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
 	return tag.RowsAffected(), nil
+}
+
+// extSourceOrder 返回扩展源标识按当前优先级快照排列的数组（越小越靠前），
+// bgm 全量清理重指主行时的排序基准；未登记的来源排最后（NULLS LAST）。
+// 优先级读 SetSourcePriorities 维护的运行期快照（登记表默认 + 管理设置覆写），
+// 与 GroupSourceSort/主行选择同一份序——设置里调序，重指基准跟着变。
+func extSourceOrder() []string {
+	ids := make([]string, 0, len(registry.All()))
+	for _, s := range registry.All() {
+		if !s.Native {
+			ids = append(ids, s.ID)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return sourceRankOf(ids[i]) < sourceRankOf(ids[j]) })
+	return ids
 }
 
 // RecomputeTagUsage 重算标签热度（抓取结束后调用）。
@@ -711,13 +1067,16 @@ func (s *Store) RecomputeTagUsage(ctx context.Context) error {
 		WHERE t.id = u.tag_id`); err != nil {
 		return err
 	}
-	// 元标签预聚合表（MetaTagSuggest 直查本表）
+	// 元标签预聚合表（MetaTagSuggest 直查本表）。元标签是原生索引专属概念
+	//（扩展源 meta_tags 恒为空数组），聚合按来源维度圈定（登记表常量参数传入，
+	// 不写类型码或来源名字面量）。
 	if _, err := tx.Exec(ctx, `DELETE FROM meta_tag_usage`); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO meta_tag_usage (type, name, count)
-		SELECT s.type, m, count(*)::int FROM subjects s, unnest(s.meta_tags) AS m GROUP BY s.type, m`); err != nil {
+		SELECT s.type, m, count(*)::int FROM subjects s, unnest(s.meta_tags) AS m
+		WHERE s.source = $1 GROUP BY s.type, m`, registry.SourceBGM); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

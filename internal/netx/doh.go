@@ -25,6 +25,7 @@ import (
 	"time"
 )
 
+// DNS 解析与缓存的默认值（管理设置保存后 SetTunables 覆盖）。
 const (
 	dohTimeout      = 6 * time.Second
 	minCacheTTL     = 60 * time.Second
@@ -40,6 +41,29 @@ type Resolver struct {
 	addrs    map[string]addrEntry
 	ech      map[string]echEntry
 	preferEp int
+
+	// 解析超时与缓存 TTL 的运行期值（默认 = 上方常量；管理设置立刷）。
+	timeout  time.Duration
+	cacheMin time.Duration
+	cacheTTL time.Duration
+}
+
+// SetTunables 覆盖解析超时与缓存 TTL（保存设置后调用；零值忽略，缓存下限
+// 自动钳到不超过默认 TTL）。
+func (r *Resolver) SetTunables(timeoutSec, cacheMinSec, cacheTTLSec int) {
+	if timeoutSec > 0 {
+		r.timeout = time.Duration(timeoutSec) * time.Second
+		r.client.Timeout = r.timeout
+	}
+	if cacheMinSec > 0 {
+		r.cacheMin = time.Duration(cacheMinSec) * time.Second
+	}
+	if cacheTTLSec > 0 {
+		r.cacheTTL = time.Duration(cacheTTLSec) * time.Second
+	}
+	if r.cacheMin > r.cacheTTL {
+		r.cacheMin = r.cacheTTL
+	}
 }
 
 type addrEntry struct {
@@ -68,6 +92,9 @@ func NewResolver(endpoints []string, enableECH bool) *Resolver {
 	return &Resolver{
 		endpoints: endpoints,
 		enableECH: enableECH,
+		timeout:   dohTimeout,
+		cacheMin:  minCacheTTL,
+		cacheTTL:  defaultCacheTTL,
 		client: &http.Client{
 			Timeout: dohTimeout,
 			Transport: &http.Transport{
@@ -137,8 +164,8 @@ func (r *Resolver) Resolve(ctx context.Context, host string) ([]netip.Addr, erro
 	}
 	// IPv4 优先，避免无 IPv6 出口时先撞拨号超时。
 	sort.SliceStable(answers, func(i, j int) bool { return answers[i].Is4() && !answers[j].Is4() })
-	if ttl < minCacheTTL {
-		ttl = minCacheTTL
+	if ttl < r.cacheMin {
+		ttl = r.cacheMin
 	}
 	r.mu.Lock()
 	r.addrs[host] = addrEntry{addrs: answers, expires: time.Now().Add(ttl)}
@@ -255,8 +282,8 @@ func (r *Resolver) ECHConfig(ctx context.Context, host string) []byte {
 			}
 		}
 	}
-	if ttl < minCacheTTL {
-		ttl = minCacheTTL
+	if ttl < r.cacheMin {
+		ttl = r.cacheMin
 	}
 	r.mu.Lock()
 	r.ech[host] = echEntry{list: list, expires: time.Now().Add(ttl)}

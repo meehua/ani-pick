@@ -79,12 +79,27 @@ func (s *Store) CreateSession(ctx context.Context, token string, ttl time.Durati
 	return err
 }
 
-// 会话校验缓存的参数：TTL 内重复校验零 DB 开销；last_seen 落库节流，消除每请求写放大。
-const (
-	sessionCacheTTL     = time.Minute
-	sessionSeenWriteGap = 10 * time.Minute
-	sessionCacheMax     = 512
+// 会话校验缓存的参数：TTL 内重复校验零 DB 开销；last_seen 落库节流，消除每请求
+// 写放大。数值是运行期设置（ServerSettings，SetSessionCacheParams 立刷）；
+// 「缓存 + 落库节流」机制本身是性能红线，只许调参数不许绕过。
+var (
+	sessCacheTTL     = time.Minute
+	sessSeenWriteGap = 10 * time.Minute
+	sessCacheMax     = 512
 )
+
+// SetSessionCacheParams 立刷会话缓存参数（零值字段忽略）。
+func SetSessionCacheParams(ttlSec, seenGapSec, max int) {
+	if ttlSec > 0 {
+		sessCacheTTL = time.Duration(ttlSec) * time.Second
+	}
+	if seenGapSec > 0 {
+		sessSeenWriteGap = time.Duration(seenGapSec) * time.Second
+	}
+	if max > 0 {
+		sessCacheMax = max
+	}
+}
 
 type sessionCacheEntry struct {
 	validUntil time.Time
@@ -105,7 +120,7 @@ func (s *Store) SessionValid(ctx context.Context, token string) (bool, error) {
 		s.sessMu.Unlock()
 		return true, nil
 	}
-	if len(s.sessCache) > sessionCacheMax {
+	if len(s.sessCache) > sessCacheMax {
 		// 顺手清理过期项，缓存只按活跃会话数增长（单管理员场景实际只有个位数）
 		for k, e := range s.sessCache {
 			if now.After(e.validUntil) {
@@ -132,8 +147,8 @@ func (s *Store) SessionValid(ctx context.Context, token string) (bool, error) {
 	needWrite := false
 	s.sessMu.Lock()
 	e := s.sessCache[hash]
-	e.validUntil = now.Add(sessionCacheTTL)
-	if e.lastWrite.IsZero() || now.Sub(e.lastWrite) >= sessionSeenWriteGap {
+	e.validUntil = now.Add(sessCacheTTL)
+	if e.lastWrite.IsZero() || now.Sub(e.lastWrite) >= sessSeenWriteGap {
 		e.lastWrite = now
 		needWrite = true
 	}

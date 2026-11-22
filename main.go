@@ -5,21 +5,18 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
-	"time"
 
 	"anipick/internal/config"
 	"anipick/internal/crawler"
 	"anipick/internal/db"
-	"anipick/internal/netx"
+	"anipick/internal/registry"
 	"anipick/internal/secretbox"
 	"anipick/internal/server"
+	"anipick/internal/sources"
 	"anipick/internal/store"
 )
 
@@ -45,7 +42,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Open(ctx, cfg.DatabaseURL, int32(cfg.DbMaxConns), int32(cfg.DbMinConns))
+	pool, err := db.Open(ctx, cfg.DatabaseURL, db.PoolConfig{
+		MaxConns:          int32(cfg.DbMaxConns),
+		MinConns:          int32(cfg.DbMinConns),
+		ConnLifetime:      cfg.DbConnLifetime,
+		ConnIdleTime:      cfg.DbConnIdleTime,
+		HealthCheckPeriod: cfg.DbHealthCheckPeriod,
+	})
 	if err != nil {
 		slog.Error("数据库连接失败", "err", err)
 		os.Exit(1)
@@ -77,100 +80,96 @@ func main() {
 	_ = st.CleanupSessions(ctx)
 
 	defaults := store.AppSettings{
+		// 抓取配置种子（首次启动写入数据库；运行期一律在管理后台「抓取设置」
+		// 的 bgm 卡调整，不再提供环境变量）：
 		Crawl: store.CrawlSettings{
-			Types:                  cfg.Crawl.Types,
-			PageSize:               cfg.Crawl.PageSize,
-			DelayMS:                cfg.Crawl.DelayMS,
-			RequestTimeoutSec:      cfg.Crawl.RequestTimeoutSec,
-			RefreshTTLDays:         cfg.Crawl.RefreshTTLDays,
-			RefreshBatch:           cfg.Crawl.RefreshBatch,
-			IncrementalPages:       cfg.Crawl.IncrementalPages,
-			IncrementalIntervalMin: cfg.Crawl.IncrementalMin,
-			AutoIncremental:        cfg.Crawl.AutoIncremental,
-			AutoRefresh:            cfg.Crawl.AutoRefresh,
-			PruneOnFull:            cfg.Crawl.PruneOnFull,
+			Types:             []int{1, 2, 3, 4, 6},
+			PageSize:          100,
+			RequestTimeoutSec: 40,
+			RefreshTTLDays:    30,
+			RefreshBatch:      300,
+			IncrementalPages:  10,
+			AutoIncremental:   true,
+			AutoRefresh:       true,
+			PruneOnFull:       true,
+			// 自动任务调度：增量默认每 6 小时一轮，过期重爬默认每 10 分钟一轮
+			//（与旧版本写死行为一致，现均为后台可调的设置项）
+			IncrementalSchedule: store.AutoSchedule{Kind: "interval", EveryMin: 360},
+			RefreshSchedule:     store.AutoSchedule{Kind: "interval", EveryMin: 10},
+			// 任务稳健性 / 请求与重试 / 合并参数（默认推荐值，后台「抓取设置」可调）
+			SchedulerTickSec:     120,
+			PageFailRetries:      3,
+			PageRetryWaitSec:     5,
+			RefreshProgressEvery: 20,
+			SchedulerLookback:    20,
+			StaleRetryCap:        5,
+			SourceGapMS:          2000,
+			ExtTagMax:            8,
+			RequestAttempts:      3,
+			RequestBackoffMS:     2000,
+			RetryAfterCapSec:     30,
+			ResponseLimitMB:      8,
+			OutboundTimeoutSec:   30,
+			MatchYearWindow:      1,
+			RematchBatch:         100,
 		},
-		BGM: store.BGMSettings{
-			Token:  cfg.BGM.Token,
-			Cookie: cfg.BGM.Cookie,
-			UA:     cfg.BGM.UA,
+		BGM: store.BGMSettings{},
+		// 出站网络种子（DoH 默认开启；运行期在「抓取设置 → 网络」调整，
+		// 代理/DoH/ECH 变更保存后立即重建出站通道）
+		Network: store.NetworkSettings{
+			DoH:          true,
+			ECH:          true,
+			DoHEndpoints: []string{"https://dns.alidns.com/resolve", "https://1.1.1.1/dns-query"},
 		},
 	}
+	// 每源请求间隔的种子 = 登记表默认（Sources 不设即取登记表值，下同）。
+	defaults.Sources = map[string]store.SourceSetting{
+		registry.SourceBGM: {Enabled: true},
+	}
 
-	// 出站网络：DoH 解析 + 可用时 ECH；仅用于服务端抓取与管理员凭据校验。
-	var resolver *netx.Resolver
-	var netHTTP *http.Client
-	proxyConfigured := false
-	if cfg.Net.EgressProxy != "" {
-		u, perr := url.Parse(cfg.Net.EgressProxy)
-		if perr != nil {
-			slog.Error("ANIPICK_EGRESS_PROXY 无效", "err", perr)
+	// 扩展数据源适配器（收获 + 详情代理共用同一批实例；顺序即合并运行的执行顺序）。
+	// 凭据（TMDB key / MAL Client ID）来自后台设置（secretbox 加密存库），经凭据
+	// 快照下发；server 启动与每次保存设置都会立刷快照与出站通道。
+	creds := sources.NewCredStore()
+	harvesters := []sources.Harvester{
+		sources.NewTMDB(creds, nil),
+		sources.NewITunes(nil),
+		sources.NewMAL(creds, nil),
+		sources.NewAniList(nil),
+	}
+
+	cw := crawler.New(st, defaults, nil, harvesters)
+	detailers := make(map[string]sources.Detailer, len(harvesters))
+	for _, h := range harvesters {
+		d, ok := h.(sources.Detailer)
+		if !ok {
+			slog.Error("数据源适配器缺少详情接口", "source", h.Source())
 			os.Exit(1)
 		}
-		netHTTP = netx.NewProxyHTTPClient(u)
-		proxyConfigured = true
-		slog.Info("抓取出口使用代理（仅服务端抓取）", "scheme", u.Scheme, "host", u.Host)
-	} else if cfg.Net.DoH {
-		resolver = netx.NewResolver(cfg.Net.DoHEndpoints, cfg.Net.ECH)
-		netHTTP = resolver.NewHTTPClient()
-		slog.Info("DoH 已启用", "endpoints", cfg.Net.DoHEndpoints, "ech", cfg.Net.ECH)
+		detailers[h.Source()] = d
 	}
-
-	// 可信反代网段：只有对端在此列表内才采信真实 IP 头（防伪造绕过限流）
-	var trustedCIDRs []*net.IPNet
-	for _, part := range strings.Split(cfg.TrustedProxyCIDRs, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		_, cidr, perr := net.ParseCIDR(part)
-		if perr != nil {
-			slog.Error("ANIPICK_TRUSTED_PROXY_CIDRS 无效", "cidr", part, "err", perr)
-			os.Exit(1)
-		}
-		trustedCIDRs = append(trustedCIDRs, cidr)
-	}
-	if cfg.ClientIPHeader != "" && len(trustedCIDRs) == 0 {
-		slog.Warn("已配置 ANIPICK_CLIENT_IP_HEADER 但未配置可信网段，真实 IP 头不会被采信；" +
-			"请同时设置 ANIPICK_TRUSTED_PROXY_CIDRS（如 Cloudflare 网段）")
-	}
-
-	cw := crawler.New(st, defaults, netHTTP)
 	srv, err := server.New(st, cw, defaults, server.Options{
-		HTTPClient:        netHTTP,
-		Resolver:          resolver,
-		EgressProxy:       proxyConfigured,
-		Version:           version,
-		Commit:            commit,
-		ClientIPHeader:    cfg.ClientIPHeader,
-		TrustedProxyCIDRs: trustedCIDRs,
+		Version:     version,
+		Commit:      commit,
+		Detailers:   detailers,
+		Credentials: creds,
 	})
 	if err != nil {
 		slog.Error("初始化服务失败", "err", err)
 		os.Exit(1)
 	}
 
+	// HTTP 服务超时（基础设施参数，默认与既有值一致；部署形态不同可经 env 调整）
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      120 * time.Second,
-		IdleTimeout:       90 * time.Second,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
 	}
 
 	go cw.Scheduler(ctx)
-
-	if resolver != nil {
-		go func() {
-			dctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-			defer cancel()
-			d := resolver.Diagnose(dctx, "api.bgm.tv")
-			slog.Info("出站网络诊断",
-				"host", d.Host, "addrs", d.Addresses,
-				"ech_advertised", d.ECHAdvertised, "err", d.Error)
-		}()
-	}
 
 	go func() {
 		slog.Info("AniPick 已启动",
@@ -184,7 +183,7 @@ func main() {
 
 	<-ctx.Done()
 	slog.Info("正在关闭…")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), srv.ShutdownWait())
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("关闭 HTTP 服务超时", "err", err)

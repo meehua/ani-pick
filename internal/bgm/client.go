@@ -12,12 +12,54 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const (
 	BaseURL = "https://api.bgm.tv"
+
+	// 页大小硬顶 = Bangumi API 官方单页上限（管理设置里的每页条数也到不了这）。
+	maxPageSize int64 = 100
+	// defaultTimeout 是未显式给超时时的兜底（实际超时来自管理设置「请求超时」）。
+	defaultTimeout = 25 * time.Second
 )
+
+// retryPolicy 是请求重试与响应体积的运行期参数（原为具名常量，全部后台可调）：
+// attempts 重试次数、backoff 退避基数（按平方递增）、retryAfter 429 等待封顶、
+// respLimit 单响应体积上限。默认值 = 旧写死值，管理设置保存后 SetRetryPolicy 立刷。
+type retryPolicy struct {
+	attempts   int
+	backoff    time.Duration
+	retryAfter time.Duration
+	respLimit  int64
+}
+
+var policy = func() atomic.Value {
+	v := atomic.Value{}
+	v.Store(retryPolicy{attempts: 3, backoff: 2 * time.Second, retryAfter: 30 * time.Second, respLimit: 8 << 20})
+	return v
+}()
+
+// SetRetryPolicy 立刷重试参数（零值字段忽略）。
+func SetRetryPolicy(attempts int, backoff, retryAfter time.Duration, respLimitMB int) {
+	cur := policy.Load().(retryPolicy)
+	if attempts > 0 {
+		cur.attempts = attempts
+	}
+	if backoff > 0 {
+		cur.backoff = backoff
+	}
+	if retryAfter > 0 {
+		cur.retryAfter = retryAfter
+	}
+	if respLimitMB > 0 {
+		cur.respLimit = int64(respLimitMB) << 20
+	}
+	policy.Store(cur)
+}
+
+func currentPolicy() retryPolicy { return policy.Load().(retryPolicy) }
 
 var (
 	ErrNotFound     = errors.New("条目不存在或无权访问")
@@ -42,7 +84,7 @@ func NewWithHTTPClient(hc *http.Client, token, cookie, ua string, timeout time.D
 		ua = "AniPick/1.0 (+https://github.com/bangumi; local indexer)"
 	}
 	if timeout <= 0 {
-		timeout = 25 * time.Second
+		timeout = defaultTimeout
 	}
 	client := hc
 	if client == nil {
@@ -116,8 +158,9 @@ func (c *Client) ListSubjects(ctx context.Context, typ int, sort string, limit, 
 	if sort == "" {
 		sort = "date"
 	}
-	if limit <= 0 || limit > 100 {
-		limit = 100
+	// 页大小语义在设置里（抓取设置 → bgm 卡「每页条数」）；这里截回官方单页上限
+	if limit <= 0 || limit > int(maxPageSize) {
+		limit = int(maxPageSize)
 	}
 	q := url.Values{}
 	q.Set("type", strconv.Itoa(typ))
@@ -157,12 +200,13 @@ func (c *Client) Me(ctx context.Context) (*User, error) {
 
 func (c *Client) getJSON(ctx context.Context, path string, dst any) error {
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	rp := currentPolicy()
+	for attempt := 0; attempt < rp.attempts; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(time.Duration(attempt*attempt) * time.Second):
+			case <-time.After(time.Duration(attempt*attempt) * rp.backoff):
 			}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, BaseURL+path, nil)
@@ -183,7 +227,7 @@ func (c *Client) getJSON(ctx context.Context, path string, dst any) error {
 			lastErr = fmt.Errorf("请求 Bangumi: %w", err)
 			continue
 		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, rp.respLimit))
 		resp.Body.Close()
 		if readErr != nil {
 			lastErr = readErr
@@ -226,8 +270,9 @@ func retryAfter(h http.Header) time.Duration {
 		return 0
 	}
 	if n, err := strconv.Atoi(v); err == nil {
-		if n > 30 {
-			n = 30
+		// 上游给多大的等待都截到封顶值：防止单次重试把任务挂死太久
+		if cap := int(currentPolicy().retryAfter.Seconds()); n > cap {
+			n = cap
 		}
 		return time.Duration(n) * time.Second
 	}

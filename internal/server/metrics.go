@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	routeDursCap = 256 // 每路由保留的近期耗时样本数（算 p95 用）
-	recentCap    = 256 // 全局近期请求环形缓冲
+	routeDursCapDefault = 256 // 每路由耗时样本数默认（运行期设置 perf_sample_cap）
+	recentCapDefault    = 256 // 全局近期请求环形缓冲默认（运行期设置 recent_req_cap）
 	// SPA 托管路由的统计键；带扩展名的静态产物请求不进统计
 	staticRoute = "GET /"
 )
@@ -45,20 +45,50 @@ type reqRecord struct {
 }
 
 type metrics struct {
-	started time.Time
-	mu      sync.Mutex
-	routes  map[string]*routeStat
-	recent  []reqRecord
-	recentN int
-	cache   map[string]cacheKindStat
+	started  time.Time
+	mu       sync.Mutex
+	routeCap int // 每路由耗时样本上限（设置 perf_sample_cap）
+	recentCa int // 全局近期请求环形缓冲上限（设置 recent_req_cap）
+	routes   map[string]*routeStat
+	recent   []reqRecord
+	recentN  int
+	cache    map[string]cacheKindStat
+}
+
+// SetCaps 调整样本上限（保存设置后调用；缩小环形缓冲，丢最旧样本）。
+func (m *metrics) SetCaps(routeCap, recent int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if routeCap >= 32 {
+		m.routeCap = routeCap
+	}
+	if recent >= 32 {
+		m.recentCa = recent
+		nr := make([]reqRecord, recent)
+		copy(nr, m.recent[:min(m.recentN, len(m.recent))])
+		m.recent = nr
+		if m.recentN > recent {
+			m.recentN = recent
+		}
+	}
+	for _, rs := range m.routes {
+		if len(rs.durs) > routeCap {
+			rs.durs = rs.durs[:routeCap]
+			if rs.dursIdx > routeCap {
+				rs.dursIdx = routeCap
+			}
+		}
+	}
 }
 
 func newMetrics() *metrics {
 	return &metrics{
-		started: time.Now(),
-		routes:  map[string]*routeStat{},
-		recent:  make([]reqRecord, recentCap),
-		cache:   map[string]cacheKindStat{},
+		started:  time.Now(),
+		routes:   map[string]*routeStat{},
+		routeCap: routeDursCapDefault,
+		recentCa: recentCapDefault,
+		recent:   make([]reqRecord, recentCapDefault),
+		cache:    map[string]cacheKindStat{},
 	}
 }
 
@@ -104,10 +134,10 @@ func (m *metrics) record(route string, status int, dur, dbT, gzipT time.Duration
 	if dur > rs.maxDur {
 		rs.maxDur = dur
 	}
-	if len(rs.durs) < routeDursCap {
+	if len(rs.durs) < m.routeCap {
 		rs.durs = append(rs.durs, dur)
 	} else {
-		rs.durs[rs.dursIdx%routeDursCap] = dur
+		rs.durs[rs.dursIdx%m.routeCap] = dur
 		rs.dursIdx++
 	}
 	rs.totalBytes += bytes
@@ -115,7 +145,7 @@ func (m *metrics) record(route string, status int, dur, dbT, gzipT time.Duration
 	rs.totalGzip += gzipT
 	rs.mu.Unlock()
 
-	m.recent[m.recentN%recentCap] = reqRecord{
+	m.recent[m.recentN%m.recentCa] = reqRecord{
 		At: time.Now(), Route: route, Status: status,
 		Dur: secsMs(dur), DB: secsMs(dbT), Gzip: secsMs(gzipT), Bytes: bytes,
 	}
@@ -152,7 +182,7 @@ func (m *metrics) snapshot() metricsSnapshot {
 		Since:   m.started,
 		UptimeS: int64(time.Since(m.started).Seconds()),
 		Routes:  make([]RouteMetrics, 0, len(m.routes)),
-		Recent:  make([]reqRecord, 0, min(m.recentN, recentCap)),
+		Recent:  make([]reqRecord, 0, min(m.recentN, m.recentCa)),
 		Cache:   make(map[string]cacheKindStat, len(m.cache)),
 	}
 	for k, v := range m.cache {
@@ -178,8 +208,8 @@ func (m *metrics) snapshot() metricsSnapshot {
 		out.Routes = append(out.Routes, rm)
 	}
 	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Count > out.Routes[j].Count })
-	for i := 1; i <= min(m.recentN, recentCap); i++ {
-		out.Recent = append(out.Recent, m.recent[(m.recentN-i+recentCap*1000)%recentCap])
+	for i := 1; i <= min(m.recentN, m.recentCa); i++ {
+		out.Recent = append(out.Recent, m.recent[(m.recentN-i+m.recentCa*1000)%m.recentCa])
 	}
 	return out
 }
@@ -188,7 +218,7 @@ func (m *metrics) reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.routes = map[string]*routeStat{}
-	m.recent = make([]reqRecord, recentCap)
+	m.recent = make([]reqRecord, m.recentCa)
 	m.recentN = 0
 	m.cache = map[string]cacheKindStat{}
 	m.started = time.Now()

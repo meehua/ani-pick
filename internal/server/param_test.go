@@ -68,3 +68,19 @@ func TestValidationHelpers(t *testing.T) {
 		t.Error("日期校验边界不符预期")
 	}
 }
+
+// TestSearchSourceValidation source 入参白名单：非法来源直接 400（不进缓存不打库）。
+// 合法来源会继续走 store 查询，不在无库单测覆盖范围内。
+func TestSearchSourceValidation(t *testing.T) {
+	s := &Server{limits: newLimiter()}
+	// 注：不测含分号的入参——Go 的查询解析会跳过含 ; 的参数对（得到空值=全部来源），
+	// 这属于解析层行为而非校验层。
+	for _, q := range []string{"source=evil", "source=a%00b", "source=TMDB", "source=BGMTV"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/subjects?"+q, nil)
+		rec := httptest.NewRecorder()
+		s.handleSearch(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: 应 400，实际 %d", q, rec.Code)
+		}
+	}
+}

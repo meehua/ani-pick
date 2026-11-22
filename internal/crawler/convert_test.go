@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"anipick/internal/bgm"
+	"anipick/internal/sources"
 )
 
 func TestConvertComputesTagProportion(t *testing.T) {
@@ -47,6 +48,7 @@ func TestConvertComputesTagProportion(t *testing.T) {
 }
 
 func TestNormalizeDate(t *testing.T) {
+	// normalizeDate 已上移为 sources.NormalizeDate（bgm 与扩展源共用一处），行为不变。
 	cases := map[string]string{
 		"2024-03-15":             "2024-03-15",
 		"2024-03":                "2024-03-01",
@@ -55,8 +57,8 @@ func TestNormalizeDate(t *testing.T) {
 		"  2020-01-02T00:00:00Z": "2020-01-02",
 	}
 	for in, want := range cases {
-		if got := normalizeDate(in); got != want {
-			t.Errorf("normalizeDate(%q) = %q, 期望 %q", in, got, want)
+		if got := sources.NormalizeDate(in); got != want {
+			t.Errorf("NormalizeDate(%q) = %q, 期望 %q", in, got, want)
 		}
 	}
 }
