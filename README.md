@@ -519,3 +519,5 @@ ANIPICK_TEST_DSN='postgres://ani_pick:ani_pick@127.0.0.1:5432/ani_pick?sslmode=d
 ## 许可证
 
 本项目代码以 **GNU AGPL-3.0** 发布，全文见 [LICENSE.txt](LICENSE.txt)：任何人修改本项目后再发布，或将其部署为公开网络服务，都必须按同一许可证提供完整源码。第三方数据（条目信息与图片）的版权归属见上文「公开部署与合规」。
+
+**贡献即授权**：向本项目提交 Issue 或 Pull Request，即视为同意维护者可将该贡献内容用于闭源版本与商业用途，并可按自身需要调整本项目的许可证策略。
