@@ -200,9 +200,9 @@ func TestScoreSynthesisChunked(t *testing.T) {
 	st, pool := newScratchStore(t)
 	ctx := context.Background()
 
-	old := synthesizeChunkSize
-	synthesizeChunkSize = 2
-	t.Cleanup(func() { synthesizeChunkSize = old })
+	// 块大小调小以覆盖多块路径（评分合成参数经 SetScoreSynthTunables 立刷）
+	SetScoreSynthTunables(2, 0, 0)
+	t.Cleanup(func() { SetScoreSynthTunables(2000, 0, 0) })
 
 	seed := func(id int64, name string, sc float64, total int) {
 		t.Helper()

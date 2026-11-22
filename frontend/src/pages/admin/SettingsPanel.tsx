@@ -204,6 +204,9 @@ export function SettingsPanel({
           <NumField label="优雅停机等待 (s)" value={server.shutdown_wait_sec} onChange={n => setSrvField('shutdown_wait_sec', n)} hint="默认 10 · 范围 1–120；关闭进程时等在途请求收尾" />
           <NumField label="面板轮询间隔 (s)" value={server.admin_poll_sec} onChange={n => setSrvField('admin_poll_sec', n)} hint="默认 4 · 范围 2–60；页面隐藏时自动暂停" />
           <NumField label="返回缓存页数" value={server.page_cache_max} onChange={n => setSrvField('page_cache_max', n)} hint="默认 12 · 0 = 关闭返回不还原滚动" />
+          <NumField label="合成块大小 (组)" value={server.synth_chunk_size} onChange={n => setSrvField('synth_chunk_size', n)} hint="默认 2000 · 范围 100–20000；评分全量重算按块提交" />
+          <NumField label="合成单块超时 (s)" value={server.synth_chunk_timeout_sec} onChange={n => setSrvField('synth_chunk_timeout_sec', n)} hint="默认 120 · 范围 10–600" />
+          <NumField label="合成整体超时 (s)" value={server.synth_overall_timeout_sec} onChange={n => setSrvField('synth_overall_timeout_sec', n)} hint="默认 1800 · 范围 120–7200；整体只是兜底" />
           <NumField label="元标签缓存键上限" value={cache.meta_tags_max_keys} onChange={n => setCacheField('meta_tags_max_keys', n)} hint="默认 64 · 内存有界" />
         </div>
       </Panel>

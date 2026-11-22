@@ -662,7 +662,7 @@ func (c *Crawler) RematchWorks(ctx context.Context) (store.RematchStats, error) 
 	}
 	// 组归并/重排后按当前权重重算合成评分：收尾动作不随请求取消
 	//（生产 169k 行全量重算实测 7 分半），独立 context 给足整体超时
-	sctx, scancel := context.WithTimeout(context.Background(), store.SynthesizeOverallTimeout)
+	sctx, scancel := context.WithTimeout(context.Background(), store.SynthesizeOverallTimeout())
 	defer scancel()
 	if _, err := c.st.SynthesizeScores(sctx); err != nil {
 		return stats, err

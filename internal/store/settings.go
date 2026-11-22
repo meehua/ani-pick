@@ -64,6 +64,7 @@ type CrawlSettings struct {
 	// 合并与配对
 	MatchYearWindow int `json:"match_year_window"` // 跨源合并的年份容差（±年，改小更严）
 	RematchBatch    int `json:"rematch_batch"`     // 重新配对的分批大小（条）
+	MatchDateDays   int `json:"match_date_days"`   // 同级打平的放播日期贴近容差（天）
 	// MatchGroups 是多对多类型匹配组：同组成员之间允许跨源配对；同一 (来源,
 	// 类型) 可属于多个组。nil = 未设置（旧库数据）→ 归一化时落登记表推荐默认。
 	MatchGroups [][]registry.TypeRef `json:"match_groups"`
@@ -259,6 +260,10 @@ type ServerSettings struct {
 	ShutdownWaitSec    int `json:"shutdown_wait_sec"`     // HTTP 优雅停机等待（秒）
 	AdminPollSec       int `json:"admin_poll_sec"`        // 管理面板轮询间隔（秒，页面隐藏时自动暂停）
 	PageCacheMax       int `json:"page_cache_max"`        // 前端「返回」缓存的页面数，0 = 关闭
+	// 评分合成全量重算的分块参数（生产大库上块大小与超时的取舍随机器规格而异）
+	SynthChunkSize         int `json:"synth_chunk_size"`          // 每块作品组数
+	SynthChunkTimeoutSec   int `json:"synth_chunk_timeout_sec"`   // 单块超时（秒）
+	SynthOverallTimeoutSec int `json:"synth_overall_timeout_sec"` // 整体超时（秒）
 }
 
 type AppSettings struct {
@@ -414,6 +419,10 @@ func (s *AppSettings) Normalize() {
 		c.RematchBatch = 100
 	}
 	c.RematchBatch = clamp(c.RematchBatch, 10, 1000)
+	if c.MatchDateDays <= 0 {
+		c.MatchDateDays = registry.MatchDateTiebreakDays
+	}
+	c.MatchDateDays = clamp(c.MatchDateDays, 1, 60)
 	// 匹配组：nil = 未设置 → 登记表推荐默认；成员校验（来源存在且声明过该
 	// 类型）、组内去重、淘汰空组——非法成员静默丢弃（与来源区块同口径）。
 	if c.MatchGroups == nil {
@@ -566,6 +575,18 @@ func (s *AppSettings) Normalize() {
 		sv.PageCacheMax = 12
 	}
 	sv.PageCacheMax = clamp(sv.PageCacheMax, 0, 50)
+	if sv.SynthChunkSize <= 0 {
+		sv.SynthChunkSize = 2000
+	}
+	sv.SynthChunkSize = clamp(sv.SynthChunkSize, 100, 20000)
+	if sv.SynthChunkTimeoutSec <= 0 {
+		sv.SynthChunkTimeoutSec = 120
+	}
+	sv.SynthChunkTimeoutSec = clamp(sv.SynthChunkTimeoutSec, 10, 600)
+	if sv.SynthOverallTimeoutSec <= 0 {
+		sv.SynthOverallTimeoutSec = 1800
+	}
+	sv.SynthOverallTimeoutSec = clamp(sv.SynthOverallTimeoutSec, 120, 7200)
 
 	// 数据源区块：登记表声明的源全部补默认（启用 + 优先序 + 评分权重）；
 	// 清单之外的键丢弃——登记表是唯一事实源，设置只允许覆写已声明的源。

@@ -1133,6 +1133,7 @@ export function CrawlPanel({
             <>
               <NumField label="合并年份容差 (±年)" value={crawl.match_year_window} onChange={n => setCrawlField('match_year_window', n)} hint="默认 1 · 0=必须同年；改大易误并，慎动" />
               <NumField label="重新配对分批 (条)" value={crawl.rematch_batch} onChange={n => setCrawlField('rematch_batch', n)} hint="默认 100 · 范围 10–1000" />
+              <NumField label="同级打平日期容差 (天)" value={crawl.match_date_days} onChange={n => setCrawlField('match_date_days', n)} hint="默认 14 · 范围 1–60；打平且恰有一个作品首播日期在此范围内即并入，调小更严" />
             </>
           )}
         </div>

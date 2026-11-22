@@ -321,7 +321,7 @@ func (s *Server) resynthesizeAsync() {
 	go func() {
 		defer s.synthMu.Unlock()
 		for {
-			sctx, cancel := context.WithTimeout(context.Background(), store.SynthesizeOverallTimeout)
+			sctx, cancel := context.WithTimeout(context.Background(), store.SynthesizeOverallTimeout())
 			_, err := s.store.SynthesizeScores(sctx)
 			cancel()
 			if err != nil {

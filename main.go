@@ -117,6 +117,7 @@ func main() {
 			OutboundTimeoutSec:   30,
 			MatchYearWindow:      1,
 			RematchBatch:         100,
+			MatchDateDays:        registry.MatchDateTiebreakDays,
 		},
 		BGM: store.BGMSettings{},
 		// 出站网络种子（DoH 默认开启；运行期在「抓取设置 → 网络」调整，

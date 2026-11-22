@@ -8,7 +8,7 @@ package store
 //  3. 启发式：同类（kind）、年份 ±1、标题归一化后完全相等。
 //
 // 拿不准就拒绝：多个候选打平 → 源优先级归类；同级仍平且恰有一个作品的首播
-// 日期贴近入站（同一次放播）→ 并入；否则不合并，自成作品并记日志。
+// 日期贴近入站（同一次放播，容差可调）→ 并入；否则不合并，自成作品并记日志。
 // 纯函数（NormalizeTitle / KindClassOf / pickWork）与 DB 查询薄壳（matchWork /
 // recomputeGroupPrimary / mergeGroups / RematchWorks）分离，单测覆盖两半。
 
@@ -139,7 +139,7 @@ type matchCandidate struct {
 
 // pickWork 纯函数：标题归一化后完全相等的候选里取唯一 work_id。
 // 0 个候选 → (0, false) 自成作品；多个不同 work_id 打平 → 先按源优先级归类，
-// 同级仍打平且恰有一个作品的首播日期贴近入站（同一次放播，±14 天）→ 并入，
+// 同级仍打平且恰有一个作品的首播日期贴近入站（同一次放播，容差可调）→ 并入，
 // 否则 → (0, true) 拒绝合并。
 func pickWork(in matchRecord, candidates []matchCandidate) (workID int64, ambiguous bool, reason string) {
 	inSet := map[string]struct{}{}
@@ -199,9 +199,8 @@ func pickWork(in matchRecord, candidates []matchCandidate) (workID int64, ambigu
 		}
 		// 同级打平（如相邻季标题剥标点后相同）：用精确放送日期决胜。两源都提供
 		// 首播日期且候选查询按年份窗口取行（候选必有日期）——恰有一个打平作品
-		// 的首播日期与入站贴近（同一次放播，14 天内）→ 并入；日期差一个月以上
-		// 不构成同放播证据（同名同年的两部作品），其余情况宁缺毋滥拒绝。
-		const dateTiebreakDays = 14
+		// 的首播日期与入站贴近（同一次放播，容差可调，推荐 14 天）→ 并入；日期
+		// 差一个月以上不构成同放播证据（同名同年的两部作品），宁缺毋滥拒绝。
 		type dated struct {
 			work  int64
 			delta int
@@ -233,7 +232,7 @@ func pickWork(in matchRecord, candidates []matchCandidate) (workID int64, ambigu
 			var close int64
 			closeCount := 0
 			for _, it := range dateds {
-				if it.delta <= dateTiebreakDays {
+				if it.delta <= matchDateTiebreakDays {
 					closeCount++
 					close = it.work
 				}
@@ -356,22 +355,28 @@ func matchWork(ctx context.Context, tx pgxTx, in matchRecord) (workID int64, amb
 	return workID, ambiguous, nil
 }
 
-// matchYearWindow / rematchBatch / matchGroups 是合并判定的运行期参数（原为
-// 登记表常量与函数内常量，现由管理设置立刷：SetMatchTunables/SetMatchTypeGroups）。
-// 年份容差改小更严（0 = 必须同年），改大更容易误并，默认 1。
+// matchYearWindow / rematchBatch / matchDateTiebreakDays / matchGroups 是合并
+// 判定的运行期参数（原为登记表常量与函数内常量，现由管理设置立刷：
+// SetMatchTunables/SetMatchTypeGroups）。
+// 年份容差改小更严（0 = 必须同年），改大更容易误并，默认 1；
+// 日期贴近容差改小更严，默认 14 天（同一次放播的经验宽度）。
 var (
-	matchYearWindow = registry.MatchYearWindow
-	rematchBatch    = 100
-	matchGroups     = registry.MatchGroupsDefault()
+	matchYearWindow       = registry.MatchYearWindow
+	rematchBatch          = 100
+	matchDateTiebreakDays = registry.MatchDateTiebreakDays
+	matchGroups           = registry.MatchGroupsDefault()
 )
 
 // SetMatchTunables 立刷合并判定参数（保存设置后由快照链路调用）。
-func SetMatchTunables(yearWindow, batch int) {
+func SetMatchTunables(yearWindow, batch, dateDays int) {
 	if yearWindow >= 0 && yearWindow <= 5 {
 		matchYearWindow = yearWindow
 	}
 	if batch > 0 {
 		rematchBatch = batch
+	}
+	if dateDays > 0 && dateDays <= 60 {
+		matchDateTiebreakDays = dateDays
 	}
 }
 

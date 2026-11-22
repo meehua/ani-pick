@@ -304,9 +304,13 @@ func (s *Server) applySnapshot(settings store.AppSettings) {
 		})
 	}
 	// 合并判定与会话缓存参数立刷（原为登记表常量与 store 内常量）
-	store.SetMatchTunables(cr.MatchYearWindow, cr.RematchBatch)
+	store.SetMatchTunables(cr.MatchYearWindow, cr.RematchBatch, cr.MatchDateDays)
 	store.SetMatchTypeGroups(cr.MatchGroups)
 	store.SetSessionCacheParams(sv.SessionCacheTTLSec, sv.SessionSeenGapSec, sv.SessionCacheMax)
+	// 评分合成参数立刷（块大小/单块与整体超时，原为代码常量）
+	store.SetScoreSynthTunables(sv.SynthChunkSize,
+		time.Duration(sv.SynthChunkTimeoutSec)*time.Second,
+		time.Duration(sv.SynthOverallTimeoutSec)*time.Second)
 	// 性能面板样本上限立刷（环形缓冲收缩，丢最旧样本）
 	s.m.SetCaps(sv.PerfSampleCap, sv.RecentReqCap)
 	// 数据源设置立刷：资料序进匹配器，评分权重进合成，凭据进适配器

@@ -233,6 +233,8 @@ export interface CrawlSettings {
   /** 合并与配对 */
   match_year_window: number
   rematch_batch: number
+  /** 同级打平的放播日期贴近容差（天） */
+  match_date_days: number
   /** 多对多类型匹配组（同组成员之间允许跨源配对；nil 后端落推荐默认） */
   match_groups: TypeRef[][]
 }
@@ -322,6 +324,10 @@ export interface ServerSettings {
   shutdown_wait_sec: number
   admin_poll_sec: number
   page_cache_max: number
+  /** 评分合成全量重算的分块参数 */
+  synth_chunk_size: number
+  synth_chunk_timeout_sec: number
+  synth_overall_timeout_sec: number
 }
 
 export interface AdminSettings {

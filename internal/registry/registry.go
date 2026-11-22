@@ -474,6 +474,10 @@ func HasMode(id, mode string) bool {
 // MatchYearWindow 是启发式合并的年份窗口（±N 年，发行日期对齐用）。
 const MatchYearWindow = 1
 
+// MatchDateTiebreakDays 是同级打平时「放播日期贴近」的推荐容差（天）：恰有一个
+// 打平作品的首播日期落在入站日期 ±N 天内即并入；运行期经系统设置可调。
+const MatchDateTiebreakDays = 14
+
 // AnimePlatformWords 把动画源的上游载体类型映射进原生索引的平台词汇
 // （动画条目在 bgm 的 platform 取值：TV/剧场版/OVA/WEB/MAD）。
 // anilist 与 mal 两个适配器共用这一张词表，避免各写一份。

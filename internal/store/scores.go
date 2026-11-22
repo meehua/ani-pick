@@ -67,17 +67,42 @@ func weightArrays() ([]string, []float64) {
 	return srcs, vals
 }
 
-// synthesizeChunkSize 全量重算每块作品组数：按 work_id 分页、每块独立事务提交，
-// 单事务不再横跨全库（生产 169k 行单事务实测 7 分半，2 分钟超时必死）。
-// 测试调小以覆盖多块路径。
-var synthesizeChunkSize = 2000
+// synthTunables 是评分合成全量重算的运行期参数（原为代码常量，现由管理设置
+// 立刷：块大小/单块与整体超时的取舍随机器规格而异——生产 169k 行单事务实测
+// 7 分半，2 分钟超时必死，故按 work_id 分页、每块独立事务提交）。
+type synthTunables struct {
+	chunkSize      int
+	chunkTimeout   time.Duration
+	overallTimeout time.Duration
+}
 
-// synthesizeChunkTimeout 单块显式超时：长动作不给足超时就会无声继承默认值。
-const synthesizeChunkTimeout = 2 * time.Minute
+var synthParams = func() atomic.Value {
+	v := atomic.Value{}
+	v.Store(synthTunables{chunkSize: 2000, chunkTimeout: 2 * time.Minute, overallTimeout: 30 * time.Minute})
+	return v
+}()
 
-// SynthesizeOverallTimeout 全量重算整体上限（重新配对作品 / 设置保存用它的独立
-// context 包外层）；每块独立提交，整体超时只是兜底。
-const SynthesizeOverallTimeout = 30 * time.Minute
+// SetScoreSynthTunables 立刷评分合成参数（零值/负值字段忽略，保留原值；
+// 保存设置后由快照链路调用）。
+func SetScoreSynthTunables(chunkSize int, chunkTimeout, overallTimeout time.Duration) {
+	cur := synthParams.Load().(synthTunables)
+	if chunkSize > 0 {
+		cur.chunkSize = chunkSize
+	}
+	if chunkTimeout > 0 {
+		cur.chunkTimeout = chunkTimeout
+	}
+	if overallTimeout > 0 {
+		cur.overallTimeout = overallTimeout
+	}
+	synthParams.Store(cur)
+}
+
+// SynthesizeOverallTimeout 返回全量重算的整体上限（重新配对作品 / 设置保存用
+// 它包外层 context）；每块独立提交，整体超时只是兜底。
+func SynthesizeOverallTimeout() time.Duration {
+	return synthParams.Load().(synthTunables).overallTimeout
+}
 
 // SQLSTATE：死锁牺牲品 / 序列化冲突——块级重试可解的竞态类错误。
 const (
@@ -130,14 +155,15 @@ func synthesizeFor(ctx context.Context, tx pgxTx, workIDs []int64) error {
 // 竞态失败重试一次、仍失败记日志跳过留待下轮重算覆盖。耗时写日志留档。
 func (s *Store) SynthesizeScores(ctx context.Context) (time.Duration, error) {
 	start := time.Now()
+	tp := synthParams.Load().(synthTunables)
 	blocks, failed := 0, 0
 	var last int64
 	for {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		pctx, cancel := context.WithTimeout(ctx, synthesizeChunkTimeout)
-		ids, err := s.nextSynthesizeChunk(pctx, last)
+		pctx, cancel := context.WithTimeout(ctx, tp.chunkTimeout)
+		ids, err := s.nextSynthesizeChunk(pctx, last, tp.chunkSize)
 		if err != nil {
 			cancel()
 			return 0, fmt.Errorf("评分合成分页（work_id>%d）: %w", last, err)
@@ -169,9 +195,10 @@ const synthesizePageStmt = `
 	ORDER BY work_id
 	LIMIT $2`
 
-// nextSynthesizeChunk 取下一块作品组 id（有序去重，last 为上一块末尾）。
-func (s *Store) nextSynthesizeChunk(ctx context.Context, last int64) ([]int64, error) {
-	rows, err := s.Pool.Query(ctx, synthesizePageStmt, last, synthesizeChunkSize)
+// nextSynthesizeChunk 取下一块作品组 id（有序去重，last 为上一块末尾，
+// size 为每块组数）。
+func (s *Store) nextSynthesizeChunk(ctx context.Context, last int64, size int) ([]int64, error) {
+	rows, err := s.Pool.Query(ctx, synthesizePageStmt, last, size)
 	if err != nil {
 		return nil, err
 	}
