@@ -131,16 +131,19 @@ type Subject struct {
 	RatingTotal int      `json:"rating_total"`
 	// RawScore / RawRatingTotal 是本行所属来源自己的原始评分（评分对比行用，
 	// 主行上的 Score 是作品组合成值）；组内字段，不外泄。
-	RawScore       float64  `json:"-"`
-	RawRatingTotal int      `json:"-"`
-	Wish           int      `json:"wish"`
-	Collect        int      `json:"collect"`
-	Doing          int      `json:"doing"`
-	OnHold         int      `json:"on_hold"`
-	Dropped        int      `json:"dropped"`
-	NSFW           bool     `json:"nsfw"`
-	MetaTags       []string `json:"meta_tags"`
-	Image          string   `json:"image"`
+	RawScore       float64 `json:"-"`
+	RawRatingTotal int     `json:"-"`
+	// RatingDist 是本行的评分分布（1~10 分十档人数；空 = 该源无分档数据）。
+	// 组内字段，经详情响应 sources 数组外发。
+	RatingDist []int32  `json:"-"`
+	Wish       int      `json:"wish"`
+	Collect    int      `json:"collect"`
+	Doing      int      `json:"doing"`
+	OnHold     int      `json:"on_hold"`
+	Dropped    int      `json:"dropped"`
+	NSFW       bool     `json:"nsfw"`
+	MetaTags   []string `json:"meta_tags"`
+	Image      string   `json:"image"`
 	// Summary 是条目简介（抓取时随上游载荷入库；详情页只读库不回上游）。
 	// 存量行在下次抓取前为空串——字段恒输出，消费方不需要判 undefined。
 	Summary   string    `json:"summary"`

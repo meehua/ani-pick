@@ -19,7 +19,7 @@ import (
 // subjectColumns 是条目查询的列清单（source_ref 为身份内部字段：入扫描、JSON 不外泄）。
 // score/rating_total 是作品组合成值（主行上物化）；raw_* 是该行所属来源的原始值。
 const subjectColumns = `s.id, s.source, s.source_ref, s.type, s.name, s.name_cn, COALESCE(to_char(s.date, 'YYYY-MM-DD'), ''),
-	s.platform, s.rank, s.score::float8, s.rating_total, s.raw_score::float8, s.raw_rating_total, s.wish, s.collect, s.doing, s.on_hold, s.dropped,
+	s.platform, s.rank, s.score::float8, s.rating_total, s.raw_score::float8, s.raw_rating_total, s.rating_dist, s.wish, s.collect, s.doing, s.on_hold, s.dropped,
 	s.nsfw, s.meta_tags, s.image, s.summary, s.tags_total, s.locked, s.fetched_at`
 
 // 搜索总数缓存：翻页复用同一 count，上限防止关键词型 key 无界增长。
@@ -38,7 +38,7 @@ type countEntry struct {
 func scanSubject(row pgx.Row) (Subject, error) {
 	var sub Subject
 	err := row.Scan(&sub.ID, &sub.Source, &sub.SourceRef, &sub.Type, &sub.Name, &sub.NameCN, &sub.Date, &sub.Platform, &sub.Rank,
-		&sub.Score, &sub.RatingTotal, &sub.RawScore, &sub.RawRatingTotal, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
+		&sub.Score, &sub.RatingTotal, &sub.RawScore, &sub.RawRatingTotal, &sub.RatingDist, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
 		&sub.NSFW, &sub.MetaTags, &sub.Image, &sub.Summary, &sub.TagsTotal, &sub.Locked, &sub.FetchedAt)
 	return sub, err
 }
@@ -279,12 +279,17 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 		}
 		touched[workIDs[i]] = struct{}{}
 		var isInsert bool
+		// rating_dist 列 NOT NULL：nil 归一为空数组（空 = 该源无分档数据）
+		dist := rec.RatingDist
+		if dist == nil {
+			dist = []int32{}
+		}
 		err := tx.QueryRow(ctx, `
 			INSERT INTO subjects (id, source, source_ref, work_id, ext_key, alt_titles, type, name, name_cn, date,
-				platform, rank, score, rating_total, raw_score, raw_rating_total, wish, collect, doing, on_hold, dropped,
+				platform, rank, score, rating_total, raw_score, raw_rating_total, rating_dist, wish, collect, doing, on_hold, dropped,
 				nsfw, meta_tags, image, summary, tags_total, locked, fail_count, last_run_id, fetched_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, $9, NULLIF($10, '')::date, $11, $12, $13, $14, $15, $16,
-				$17, $18, $19, $20, $21, $22, $23::text[], $24, $25, $26, $27, 0, $28, now(), now())
+			VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, $9, NULLIF($10, '')::date, $11, $12, $13, $14, $15, $16, $17::integer[],
+				$18, $19, $20, $21, $22, $23, $24::text[], $25, $26, $27, $28, 0, $29, now(), now())
 			ON CONFLICT (id) DO UPDATE SET
 				source = EXCLUDED.source, source_ref = EXCLUDED.source_ref,
 				ext_key = EXCLUDED.ext_key, alt_titles = EXCLUDED.alt_titles,
@@ -295,7 +300,7 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 				-- raw_* 永远保存该来源自己的原始值；score 先落回原始值，
 				-- 属于作品组主行的部分由本次写入收尾的合成重算覆盖
 				score = EXCLUDED.raw_score, rating_total = EXCLUDED.raw_rating_total,
-				raw_score = EXCLUDED.raw_score, raw_rating_total = EXCLUDED.raw_rating_total,
+				raw_score = EXCLUDED.raw_score, raw_rating_total = EXCLUDED.raw_rating_total, rating_dist = EXCLUDED.rating_dist,
 				wish = EXCLUDED.wish, collect = EXCLUDED.collect, doing = EXCLUDED.doing,
 				on_hold = EXCLUDED.on_hold, dropped = EXCLUDED.dropped, nsfw = EXCLUDED.nsfw,
 				meta_tags = EXCLUDED.meta_tags, image = EXCLUDED.image, summary = EXCLUDED.summary, tags_total = EXCLUDED.tags_total,
@@ -305,7 +310,7 @@ func (s *Store) UpsertSubjects(ctx context.Context, recs []Subject, runID int64)
 			RETURNING (xmax = 0)`,
 			ids[i], rec.Source, rec.SourceRef, workIDs[i], rec.ExtKey, rec.AltTitles,
 			rec.Type, rec.Name, rec.NameCN, rec.Date, rec.Platform,
-			rec.Rank, rec.Score, rec.RatingTotal, rec.Score, rec.RatingTotal, rec.Wish, rec.Collect, rec.Doing, rec.OnHold,
+			rec.Rank, rec.Score, rec.RatingTotal, rec.Score, rec.RatingTotal, dist, rec.Wish, rec.Collect, rec.Doing, rec.OnHold,
 			rec.Dropped, rec.NSFW, rec.MetaTags, rec.Image, rec.Summary, rec.TagsTotal, rec.Locked, runID).Scan(&isInsert)
 		if err != nil {
 			return inserted, updated, fmt.Errorf("写入条目 %d: %w", ids[i], err)
@@ -670,7 +675,7 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 		var sub Subject
 		var tagsJSON []byte
 		if err := rows.Scan(&sub.ID, &sub.Source, &sub.SourceRef, &sub.Type, &sub.Name, &sub.NameCN, &sub.Date, &sub.Platform, &sub.Rank,
-			&sub.Score, &sub.RatingTotal, &sub.RawScore, &sub.RawRatingTotal, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
+			&sub.Score, &sub.RatingTotal, &sub.RawScore, &sub.RawRatingTotal, &sub.RatingDist, &sub.Wish, &sub.Collect, &sub.Doing, &sub.OnHold, &sub.Dropped,
 			&sub.NSFW, &sub.MetaTags, &sub.Image, &sub.Summary, &sub.TagsTotal, &sub.Locked, &sub.FetchedAt, &tagsJSON); err != nil {
 			return out, err
 		}
@@ -769,24 +774,32 @@ func (s *Store) MetaTagSuggest(ctx context.Context, typ int, limit int) ([]TagSt
 	return out, rows.Err()
 }
 
+// SourceMatchStat 是单个扩展源的多源匹配度：行数与已并入多源作品组的行数
+// （组内除自身外还有别的来源行）；匹配率由消费方换算。bgm 是锚点源不统计。
+type SourceMatchStat struct {
+	Rows   int `json:"rows"`
+	Merged int `json:"merged"`
+}
+
 type Stats struct {
-	Total       int            `json:"total"`
-	ByType      map[string]int `json:"by_type"`
-	BySource    map[string]int `json:"by_source"`
-	Tags        int            `json:"tags"`
-	SubjectTags int            `json:"subject_tags"`
-	LastFetched *time.Time     `json:"last_fetched"`
-	NSFW        int            `json:"nsfw"`
-	DBSize      int64          `json:"db_size"`
+	Total       int                        `json:"total"`
+	ByType      map[string]int             `json:"by_type"`
+	BySource    map[string]int             `json:"by_source"`
+	SourceMatch map[string]SourceMatchStat `json:"source_match"`
+	Tags        int                        `json:"tags"`
+	SubjectTags int                        `json:"subject_tags"`
+	LastFetched *time.Time                 `json:"last_fetched"`
+	NSFW        int                        `json:"nsfw"`
+	DBSize      int64                      `json:"db_size"`
 }
 
 func (s *Store) Stats(ctx context.Context) (Stats, error) {
-	out := Stats{ByType: map[string]int{}, BySource: map[string]int{}}
+	out := Stats{ByType: map[string]int{}, BySource: map[string]int{}, SourceMatch: map[string]SourceMatchStat{}}
 
-	// 五条独立统计查询并行执行：省 IO 等待（总 CPU 不变，都是同一批小聚合）
+	// 六条独立统计查询并行执行：省 IO 等待（总 CPU 不变，都是同一批小聚合）
 	var wg sync.WaitGroup
-	errs := make([]error, 4)
-	wg.Add(5) // 来源计数不计入 errs，失败静默
+	errs := make([]error, 5)
+	wg.Add(6) // 来源计数不计入 errs，失败静默
 	go func() {
 		defer wg.Done()
 		// 总数/敏感数/类型计数一次拿齐，口径 = 作品数（塌缩到主行；扩展源行
@@ -850,6 +863,32 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		var last *time.Time
 		errs[3] = s.Pool.QueryRow(ctx, `SELECT max(fetched_at) FROM subjects`).Scan(&last)
 		out.LastFetched = last
+	}()
+	go func() {
+		defer wg.Done()
+		// 多源匹配度：扩展源行中已并入多源作品组（组内还有别的来源行）的比例。
+		// 只扫扩展源行（每源几百到几千行），EXISTS 走 work_id 索引；bgm 是锚点源。
+		// work_id=0 的迁移前旧行不算并入。
+		rows, err := s.Pool.Query(ctx, `
+			SELECT s.source, count(*),
+				count(*) FILTER (WHERE s.work_id > 0 AND EXISTS (
+					SELECT 1 FROM subjects x WHERE x.work_id = s.work_id AND x.id <> s.id))
+			FROM subjects s WHERE s.source <> $1 GROUP BY s.source`, SourceBGM)
+		if err != nil {
+			errs[4] = err
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var src string
+			var sm SourceMatchStat
+			if err := rows.Scan(&src, &sm.Rows, &sm.Merged); err != nil {
+				errs[4] = err
+				return
+			}
+			out.SourceMatch[src] = sm
+		}
+		errs[4] = rows.Err()
 	}()
 	wg.Wait()
 	for _, e := range errs {

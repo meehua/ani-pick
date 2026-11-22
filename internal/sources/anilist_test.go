@@ -60,6 +60,10 @@ func TestAniListConvert(t *testing.T) {
 	if rec.RatingTotal != 1000 {
 		t.Fatalf("rating_total 应为分布总和 1000, 实际 %d", rec.RatingTotal)
 	}
+	// scoreDistribution（10 分一档）→ 十档人数：score/10 = 档位
+	if rec.RatingDist == nil || len(rec.RatingDist) != 10 || rec.RatingDist[0] != 300 || rec.RatingDist[1] != 700 {
+		t.Fatalf("分布应归一为十档 (300,700,0…): %v", rec.RatingDist)
+	}
 	if rec.Collect != 1080842 || rec.Wish != 80859 {
 		t.Fatalf("人气/收藏映射异常: %+v", rec)
 	}

@@ -235,13 +235,15 @@ type subjectSourceRow struct {
 	Source      string  `json:"source"`
 	Score       float64 `json:"score"`
 	RatingTotal int     `json:"rating_total"`
-	URL         string  `json:"url"`
-	Name        string  `json:"name,omitempty"`
-	NameCN      string  `json:"name_cn,omitempty"`
-	Platform    string  `json:"platform,omitempty"`
-	Date        string  `json:"date,omitempty"`
-	Image       string  `json:"image,omitempty"`
-	Summary     string  `json:"summary,omitempty"`
+	// Dist 是该行的评分分布（1~10 分十档人数；空 = 该源无分档数据）。
+	Dist     []int32 `json:"dist,omitempty"`
+	URL      string  `json:"url"`
+	Name     string  `json:"name,omitempty"`
+	NameCN   string  `json:"name_cn,omitempty"`
+	Platform string  `json:"platform,omitempty"`
+	Date     string  `json:"date,omitempty"`
+	Image    string  `json:"image,omitempty"`
+	Summary  string  `json:"summary,omitempty"`
 }
 
 // subjectIndexResponse 是 /api/subjects/{id} 的响应：索引行 + 作品组的来源清单。
@@ -261,6 +263,7 @@ func toSourceRows(group []store.GroupSource) []subjectSourceRow {
 			Source:      g.Source,
 			Score:       g.Score,
 			RatingTotal: g.RatingTotal,
+			Dist:        g.Dist,
 			URL:         sources.SubjectURL(g.Source, g.SourceRef),
 			Name:        g.Name,
 			NameCN:      g.NameCN,

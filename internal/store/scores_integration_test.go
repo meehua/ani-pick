@@ -273,3 +273,45 @@ func TestScoreSynthesisChunked(t *testing.T) {
 		}
 	}
 }
+
+// TestRatingDist 评分分布入库：upsert 落 rating_dist 十档并随刷新更新；
+// nil 归一为空数组（NOT NULL 列）；GroupSources 带出（详情对比行用）。
+func TestRatingDist(t *testing.T) {
+	st, pool := newScratchStore(t)
+	ctx := context.Background()
+	if _, _, err := st.UpsertSubjects(ctx, []Subject{
+		{ID: 900301, Type: registry.TypeBook, Name: "分布作品甲", Date: "2020-01-01",
+			RatingDist: []int32{1, 0, 2, 0, 3, 0, 40, 500, 800, 300}},
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	var dist []int32
+	if err := pool.QueryRow(ctx, `SELECT rating_dist FROM subjects WHERE id = 900301`).Scan(&dist); err != nil {
+		t.Fatal(err)
+	}
+	if len(dist) != 10 || dist[8] != 800 || dist[9] != 300 {
+		t.Fatalf("分布应为十档且值正确: %v", dist)
+	}
+
+	// 无数据行：nil 归一为空数组，不落 NULL
+	if _, _, err := st.UpsertSubjects(ctx, []Subject{
+		{ID: 900302, Type: registry.TypeBook, Name: "分布作品乙", Date: "2020-01-01"},
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT rating_dist FROM subjects WHERE id = 900302`).Scan(&dist); err != nil {
+		t.Fatal(err)
+	}
+	if dist == nil || len(dist) != 0 {
+		t.Fatalf("无数据行应落空数组: %v", dist)
+	}
+
+	// GroupSources 带出分布（详情 sources 数组的数据源）
+	group, err := st.GroupSources(ctx, 900301)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(group) != 1 || len(group[0].Dist) != 10 || group[0].Dist[7] != 500 {
+		t.Fatalf("GroupSources 应带出分布: %+v", group)
+	}
+}

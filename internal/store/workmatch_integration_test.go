@@ -299,3 +299,65 @@ func TestSettingsPriorityReRank(t *testing.T) {
 		t.Fatalf("设置优先级后主行应翻转为 tmdb 行: bgm→%d tmdb→%d", work2, work3)
 	}
 }
+
+// TestWorkMatchAdjacentSeasons 相邻季标题剥标点后相同的生产实测场景
+// （けいおん! 与 けいおん!!）：同级打平按放送日期贴近决胜，各归各组；
+// 修前两行都会因打平被拒绝而自成作品。
+func TestWorkMatchAdjacentSeasons(t *testing.T) {
+	st, pool := newScratchStore(t)
+	ctx := context.Background()
+	if _, _, err := st.UpsertSubjects(ctx, []Subject{
+		{ID: 500101, Type: 2, Name: "けいおん!", Date: "2009-04-02"},
+		{ID: 500102, Type: 2, Name: "けいおん!!", Date: "2010-01-08"},
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	// anilist 行候选集 = 英文名 + 日语别名（抓取时 romaji/native 进 alt_titles）
+	anilist := []Subject{
+		{Source: SourceAniList, SourceRef: "5680", Type: 2, Name: "K-ON!",
+			AltTitles: []string{"けいおん!"}, Date: "2009-04-06"},
+		{Source: SourceAniList, SourceRef: "7791", Type: 2, Name: "K-ON!!",
+			AltTitles: []string{"けいおん!!"}, Date: "2010-01-10"},
+	}
+	for _, rec := range anilist {
+		if _, _, err := st.UpsertSubjects(ctx, []Subject{rec}, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		ref  string
+		want int64
+	}{{"5680", 500101}, {"7791", 500102}} {
+		var work int64
+		if err := pool.QueryRow(ctx, `SELECT work_id FROM subjects WHERE source='anilist' AND source_ref=$1`, tc.ref).Scan(&work); err != nil {
+			t.Fatal(err)
+		}
+		if work != tc.want {
+			t.Fatalf("anilist %s 应按日期并入组 %d: 实际 %d", tc.ref, tc.want, work)
+		}
+	}
+}
+
+// TestSourceMatchRate 多源匹配度统计：扩展源行数与已并入多源作品组的行数。
+func TestSourceMatchRate(t *testing.T) {
+	st, _ := newScratchStore(t)
+	ctx := context.Background()
+	if _, _, err := st.UpsertSubjects(ctx, []Subject{
+		{ID: 500301, Type: 2, Name: "匹配度作品", Date: "2020-04-01"},
+		{Source: SourceAniList, SourceRef: "801", Type: 2, Name: "匹配度作品", Date: "2020-04-02"},
+		// 未并入的行：自成作品
+		{Source: SourceTMDB, SourceRef: "tv/802", Type: 2, Name: "孤立的扩展源行", Date: "2021-01-01"},
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := st.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sm := stats.SourceMatch[SourceAniList]; sm.Rows != 1 || sm.Merged != 1 {
+		t.Fatalf("anilist 应 1/1（已并入）: %+v", sm)
+	}
+	if sm := stats.SourceMatch[SourceTMDB]; sm.Rows != 1 || sm.Merged != 0 {
+		t.Fatalf("tmdb 应 1/0（自成作品）: %+v", sm)
+	}
+}

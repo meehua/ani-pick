@@ -231,3 +231,38 @@ func TestPairablesOf(t *testing.T) {
 		t.Fatalf("不在组内应无候选: %v", srcs)
 	}
 }
+
+// TestPickWorkDateTiebreak 同级打平按放送日期贴近（±14 天，同一次放播）决胜：
+// 相邻季剥标点后标题相同的生产实测场景，恰有一个贴近作品才并入，其余拒绝。
+func TestPickWorkDateTiebreak(t *testing.T) {
+	mk := func(id int64, date string, titles ...string) matchCandidate {
+		return matchCandidate{ID: id, Source: SourceBGM, WorkID: id, Date: date,
+			Titles: TitleSetOf("", "", titles)}
+	}
+	in := func(date string, titles ...string) matchRecord {
+		return matchRecord{Source: SourceAniList, Date: date,
+			Titles: TitleSetOf("", "", titles)}
+	}
+	// K-ON! 场景：けいおん! 与 けいおん!! 剥标点后同为「けいおん」，相邻季相差约 9 个月
+	s1 := mk(42, "2009-04-02", "けいおん!")
+	s2 := mk(43, "2010-01-08", "けいおん!!")
+
+	// anilist S1（2009-04-06）→ 唯一最近的是 S1
+	if w, amb, _ := pickWork(in("2009-04-06", "けいおん!"), []matchCandidate{s1, s2}); w != 42 || amb {
+		t.Fatalf("应按日期并入 S1(42): w=%d amb=%v", w, amb)
+	}
+	// anilist S2（2010-01-10）→ S2
+	if w, amb, _ := pickWork(in("2010-01-10", "けいおん!!"), []matchCandidate{s1, s2}); w != 43 || amb {
+		t.Fatalf("应按日期并入 S2(43): w=%d amb=%v", w, amb)
+	}
+	// 日期相同（无法区分）→ 拒绝
+	if w, amb, _ := pickWork(in("2009-04-06", "同名作品"), []matchCandidate{
+		mk(1, "2009-04-02", "同名作品"), mk(2, "2009-04-02", "同名作品"),
+	}); w != 0 || !amb {
+		t.Fatalf("日期无法区分应拒绝: w=%d amb=%v", w, amb)
+	}
+	// 入站无日期 → 不靠日期决策，拒绝（宁缺毋滥）
+	if w, amb, _ := pickWork(in("", "けいおん!"), []matchCandidate{s1, s2}); w != 0 || !amb {
+		t.Fatalf("入站无日期应拒绝: w=%d amb=%v", w, amb)
+	}
+}

@@ -130,22 +130,72 @@ type Tag struct {
 }
 
 type Subject struct {
-	ID            int64      `json:"id"`
-	Type          int        `json:"type"`
-	Name          string     `json:"name"`
-	NameCN        string     `json:"name_cn"`
-	Date          string     `json:"date"`
-	Platform      string     `json:"platform"`
-	Image         string     `json:"image"`
-	Images        ImageSet   `json:"images"`
-	Summary       string     `json:"summary"`
-	NSFW          bool       `json:"nsfw"`
-	Locked        bool       `json:"locked"`
-	MetaTags      []string   `json:"meta_tags"`
-	Tags          []Tag      `json:"tags"`
-	Rating        Rating     `json:"rating"`
-	Collection    Collection `json:"collection"`
-	TotalEpisodes int        `json:"total_episodes"`
+	ID            int64          `json:"id"`
+	Type          int            `json:"type"`
+	Name          string         `json:"name"`
+	NameCN        string         `json:"name_cn"`
+	Date          string         `json:"date"`
+	Platform      string         `json:"platform"`
+	Image         string         `json:"image"`
+	Images        ImageSet       `json:"images"`
+	Summary       string         `json:"summary"`
+	NSFW          bool           `json:"nsfw"`
+	Locked        bool           `json:"locked"`
+	MetaTags      []string       `json:"meta_tags"`
+	Tags          []Tag          `json:"tags"`
+	Rating        Rating         `json:"rating"`
+	Collection    Collection     `json:"collection"`
+	TotalEpisodes int            `json:"total_episodes"`
+	Infobox       []InfoboxEntry `json:"infobox"`
+}
+
+// InfoboxEntry 是信息栏条目：value 为字符串或 [{v: …}] 列表两种形态
+// （维基语法决定，2026-11-22 实测确认）。
+type InfoboxEntry struct {
+	Key   string          `json:"key"`
+	Value json.RawMessage `json:"value"`
+}
+
+// Aliases 取信息栏「别名」键的候选名（去空白、保序去重；无该键返回空）。
+// bgm 的别名常含英文名/罗马字/繁简变体（实测：鬼滅の刃 的别名带
+// "Demon Slayer: Kimetsu no Yaiba"），是扩展源标题启发式命中的关键证据面——
+// v0 API 没有跨源 id 字段，bgm 自身 name/name_cn 之外只有这里能补充候选名。
+func (s Subject) Aliases() []string {
+	for _, e := range s.Infobox {
+		if e.Key != "别名" {
+			continue
+		}
+		var raw []string
+		var single string
+		if err := json.Unmarshal(e.Value, &single); err == nil {
+			raw = []string{single}
+		} else {
+			var list []struct {
+				V string `json:"v"`
+			}
+			if err := json.Unmarshal(e.Value, &list); err == nil {
+				raw = make([]string, 0, len(list))
+				for _, it := range list {
+					raw = append(raw, it.V)
+				}
+			}
+		}
+		seen := map[string]struct{}{}
+		out := make([]string, 0, len(raw))
+		for _, t := range raw {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if _, ok := seen[t]; ok {
+				continue
+			}
+			seen[t] = struct{}{}
+			out = append(out, t)
+		}
+		return out
+	}
+	return nil
 }
 
 type SubjectList struct {

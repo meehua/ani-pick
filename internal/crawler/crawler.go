@@ -905,6 +905,18 @@ func convert(s bgm.Subject) store.Subject {
 		image = s.Images.Common
 	}
 
+	// ratingDist 把 rating.count（键 "1".."10"）归一为十档人数；全 0 视为无分档数据
+	var distSum int32
+	ratingDist := make([]int32, 10)
+	for i := 1; i <= 10; i++ {
+		n := int32(s.Rating.Count[strconv.Itoa(i)])
+		ratingDist[i-1] = n
+		distSum += n
+	}
+	if distSum == 0 {
+		ratingDist = []int32{}
+	}
+
 	return store.Subject{
 		ID:          s.ID,
 		Type:        s.Type,
@@ -915,6 +927,8 @@ func convert(s bgm.Subject) store.Subject {
 		Rank:        s.Rating.Rank,
 		Score:       s.Rating.Score,
 		RatingTotal: s.Rating.Total,
+		AltTitles:   s.Aliases(),
+		RatingDist:  ratingDist,
 		Wish:        s.Collection.Wish,
 		Collect:     s.Collection.Collect,
 		Doing:       s.Collection.Doing,

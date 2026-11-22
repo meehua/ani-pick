@@ -142,6 +142,25 @@ func (m anilistMedia) ratedCount() int {
 	return n
 }
 
+// anilistDist 把 scoreDistribution 归一为十档人数（1~10 分各档）。
+// AniList 的分档粒度为 10 分一档（score 10~100，2026-11-22 实测），score/10
+// 恰为十分制档位；无数据/全 0 返回空数组。
+func anilistDist(ds []anilistScoreDist) []int32 {
+	out := make([]int32, 10)
+	var sum int32
+	for _, d := range ds {
+		if d.Amount <= 0 || d.Score < 10 || d.Score > 100 {
+			continue
+		}
+		out[d.Score/10-1] += int32(d.Amount)
+		sum += int32(d.Amount)
+	}
+	if sum == 0 {
+		return []int32{}
+	}
+	return out
+}
+
 // tagNames 过滤剧透标签并按 rank 门槛截断（门槛是运行期设置，调用方传入）。
 func (m anilistMedia) tagNames(minRank int) []string {
 	out := make([]string, 0, len(m.Tags))
@@ -207,6 +226,7 @@ func (a *AniList) convert(m anilistMedia, minRank int) store.Subject {
 		Rank:        0, // AniList 热度榜无排名概念
 		Score:       score,
 		RatingTotal: m.ratedCount(),
+		RatingDist:  anilistDist(m.Stats.ScoreDistribution),
 		Wish:        m.Favourites,
 		Collect:     m.Popularity,
 		NSFW:        false, // 发现查询已过滤 isAdult

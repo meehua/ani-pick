@@ -7,7 +7,8 @@ package store
 //  2. 跨源确定性键 ext_key（mal/anilist 的 MAL id）相等 → 同作品；
 //  3. 启发式：同类（kind）、年份 ±1、标题归一化后完全相等。
 //
-// 拿不准就拒绝：多个候选打平 → 不合并，自成作品并记日志。
+// 拿不准就拒绝：多个候选打平 → 源优先级归类；同级仍平且恰有一个作品的首播
+// 日期贴近入站（同一次放播）→ 并入；否则不合并，自成作品并记日志。
 // 纯函数（NormalizeTitle / KindClassOf / pickWork）与 DB 查询薄壳（matchWork /
 // recomputeGroupPrimary / mergeGroups / RematchWorks）分离，单测覆盖两半。
 
@@ -18,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unicode"
 
 	"github.com/jackc/pgx/v5"
@@ -132,10 +134,13 @@ type matchCandidate struct {
 	Source string
 	WorkID int64
 	Titles []string
+	Date   string // YYYY-MM-DD（候选查询按年份窗口取，必有日期）
 }
 
 // pickWork 纯函数：标题归一化后完全相等的候选里取唯一 work_id。
-// 0 个候选 → (0, false) 自成作品；多个不同 work_id 打平 → (0, true) 拒绝合并。
+// 0 个候选 → (0, false) 自成作品；多个不同 work_id 打平 → 先按源优先级归类，
+// 同级仍打平且恰有一个作品的首播日期贴近入站（同一次放播，±14 天）→ 并入，
+// 否则 → (0, true) 拒绝合并。
 func pickWork(in matchRecord, candidates []matchCandidate) (workID int64, ambiguous bool, reason string) {
 	inSet := map[string]struct{}{}
 	for _, n := range TitleSetOf("", "", in.Titles) {
@@ -192,9 +197,71 @@ func pickWork(in matchRecord, candidates []matchCandidate) (workID int64, ambigu
 		if bestCount == 1 {
 			return bestWork, false, fmt.Sprintf("「%s」在 %d 个作品上打平，按源优先级归类", in.Name, len(uniq))
 		}
+		// 同级打平（如相邻季标题剥标点后相同）：用精确放送日期决胜。两源都提供
+		// 首播日期且候选查询按年份窗口取行（候选必有日期）——恰有一个打平作品
+		// 的首播日期与入站贴近（同一次放播，14 天内）→ 并入；日期差一个月以上
+		// 不构成同放播证据（同名同年的两部作品），其余情况宁缺毋滥拒绝。
+		const dateTiebreakDays = 14
+		type dated struct {
+			work  int64
+			delta int
+		}
+		var dateds []dated
+		for _, c := range candidates {
+			if _, ok := uniq[c.WorkID]; !ok || pri[c.WorkID] != bestPri || c.Date == "" || in.Date == "" {
+				continue
+			}
+			d, err := dayDiff(in.Date, c.Date)
+			if err != nil {
+				continue
+			}
+			found := false
+			for i := range dateds {
+				if dateds[i].work == c.WorkID {
+					if d < dateds[i].delta {
+						dateds[i].delta = d
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				dateds = append(dateds, dated{c.WorkID, d})
+			}
+		}
+		if len(dateds) == bestCount {
+			var close int64
+			closeCount := 0
+			for _, it := range dateds {
+				if it.delta <= dateTiebreakDays {
+					closeCount++
+					close = it.work
+				}
+			}
+			if closeCount == 1 {
+				return close, false, fmt.Sprintf("「%s」在 %d 个同级作品上打平，按放送日期贴近归类", in.Name, len(uniq))
+			}
+		}
 		return 0, true, fmt.Sprintf("「%s」在 %d 个同级作品上打平（命中 %d 行）",
 			in.Name, len(uniq), hitRows)
 	}
+}
+
+// dayDiff 两个 YYYY-MM-DD 的天数差（绝对值）；解析失败返回错误。
+func dayDiff(a, b string) (int, error) {
+	da, err := time.Parse("2006-01-02", a)
+	if err != nil {
+		return 0, err
+	}
+	db, err := time.Parse("2006-01-02", b)
+	if err != nil {
+		return 0, err
+	}
+	d := int(da.Sub(db).Hours() / 24)
+	if d < 0 {
+		d = -d
+	}
+	return d, nil
 }
 
 // matchWork 为一条「新」入站记录决定归属组：先确定性键，再标题启发式。
@@ -357,7 +424,7 @@ func candidatesFor(ctx context.Context, tx pgxTx, in matchRecord, year int) ([]m
 	srcs, codes := pairablesOf(in.Source, in.Type)
 	w := matchYearWindow
 	rows, err := tx.Query(ctx, `
-		SELECT id, source, work_id, name, name_cn, alt_titles
+		SELECT id, source, work_id, name, name_cn, alt_titles, COALESCE(to_char(date, 'YYYY-MM-DD'), '')
 		FROM subjects
 		WHERE source <> $1
 			AND date >= make_date($2, 1, 1) AND date <= make_date($3, 12, 31)
@@ -374,7 +441,7 @@ func candidatesFor(ctx context.Context, tx pgxTx, in matchRecord, year int) ([]m
 		var c matchCandidate
 		var name, nameCN string
 		var alt []string
-		if err := rows.Scan(&c.ID, &c.Source, &c.WorkID, &name, &nameCN, &alt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Source, &c.WorkID, &name, &nameCN, &alt, &c.Date); err != nil {
 			return nil, err
 		}
 		c.Titles = TitleSetOf(name, nameCN, alt)
@@ -652,13 +719,15 @@ type GroupSource struct {
 	Source      string  `json:"source"`
 	Score       float64 `json:"score"`
 	RatingTotal int     `json:"rating_total"`
-	SourceRef   string  `json:"-"`
-	Name        string  `json:"name,omitempty"`
-	NameCN      string  `json:"name_cn,omitempty"`
-	Platform    string  `json:"platform,omitempty"`
-	Date        string  `json:"date,omitempty"`
-	Image       string  `json:"image,omitempty"`
-	Summary     string  `json:"summary,omitempty"`
+	// Dist 是该行的评分分布（1~10 分十档人数；空 = 该源无分档数据）。
+	Dist      []int32 `json:"dist,omitempty"`
+	SourceRef string  `json:"-"`
+	Name      string  `json:"name,omitempty"`
+	NameCN    string  `json:"name_cn,omitempty"`
+	Platform  string  `json:"platform,omitempty"`
+	Date      string  `json:"date,omitempty"`
+	Image     string  `json:"image,omitempty"`
+	Summary   string  `json:"summary,omitempty"`
 }
 
 // GroupSources 返回一个条目所在作品组的全部来源行（多源评分对比/外链用）。
@@ -666,7 +735,7 @@ type GroupSource struct {
 // 按 sourceRank 排序（与资料优先序一致），一次查询取齐禁 N+1。
 func (s *Store) GroupSources(ctx context.Context, id int64) ([]GroupSource, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT g.id, g.source, g.raw_score::float8, g.raw_rating_total, g.source_ref,
+		SELECT g.id, g.source, g.raw_score::float8, g.raw_rating_total, g.rating_dist, g.source_ref,
 			g.name, g.name_cn, g.platform,
 			COALESCE(to_char(g.date, 'YYYY-MM-DD'), ''), g.image, g.summary
 		FROM subjects g
@@ -679,7 +748,7 @@ func (s *Store) GroupSources(ctx context.Context, id int64) ([]GroupSource, erro
 	var out []GroupSource
 	for rows.Next() {
 		var g GroupSource
-		if err := rows.Scan(&g.ID, &g.Source, &g.Score, &g.RatingTotal, &g.SourceRef,
+		if err := rows.Scan(&g.ID, &g.Source, &g.Score, &g.RatingTotal, &g.Dist, &g.SourceRef,
 			&g.Name, &g.NameCN, &g.Platform, &g.Date, &g.Image, &g.Summary); err != nil {
 			return nil, err
 		}
