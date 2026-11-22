@@ -1,32 +1,120 @@
 # AniPick
 
-**本站自建 Bangumi 条目索引** + **浏览器直连 Bangumi 详情**的作品检索站点。
+**本站自建多来源条目索引**（Bangumi + TMDB + Apple TV + MyAnimeList + AniList）
++ **按来源分派的详情获取**的作品检索站点。
 Go 后端（单二进制，内嵌前端）+ PostgreSQL；前端 React 19 + shadcn/ui + Tailwind CSS v4。
 
 ## 术语与边界（请先读）
 
 | 概念 | 位置 | 说明 |
 |---|---|---|
-| **本站索引** | 服务器 PostgreSQL | 由站点维护者用站长账号抓取并持续更新；对**所有访客**提供检索，不是“私有本地数据” |
+| **本站索引** | 服务器 PostgreSQL | 由站点维护者从各数据源抓取并持续更新；对**所有访客**提供检索，不是“私有本地数据” |
 | **用户本机** | 访客浏览器 localStorage | 只保存访客自己的 Bangumi 访问令牌；不上传、不入库 |
-| **上游详情** | `api.bgm.tv` | 条目简介、角色、制作人员、剧集、关联作品由**访客浏览器直接请求**，本站不代理、不中转 |
+| **bgm 上游详情** | `api.bgm.tv` | 条目简介、角色、制作人员、剧集、关联作品由**访客浏览器直接请求**，本站不代理、不中转 |
+| **扩展源详情** | 服务端代理端点 | TMDB / Apple TV / MyAnimeList / AniList 的详情由服务端代理获取并归一化（TMDB key 与限速不出服务端） |
 
 本项目的硬性边界：
 
-- **不提供任何 API 中继 / 反向代理 / 图片代理**。服务端出站请求只用于自己抓取索引与管理员校验抓取凭据。
+- **不提供任何 API 中继 / 反向代理 / 图片代理**（例外：扩展源详情代理端点，见上表）。服务端出站请求只用于自己抓取索引与管理员校验抓取凭据。
 - 服务端**没有接收用户凭据的接口**；用户令牌只存在各自浏览器。
 - 本站是公开站点：索引数据对所有访客可见；管理后台独立鉴权。
 
 ## 功能
 
-- 本站索引内检索：类型多选、标签 AND/OR、排除标签、**标签占比门槛**、分类标签、日期、排名、评分、评分人数、敏感内容模式。
+- 本站索引内检索：类型多选、**来源筛选**（结果区 chips，条件写 URL）、标签 AND/OR、排除标签、**标签占比门槛**、分类标签、日期、排名、评分、评分人数、敏感内容模式。
 - 排序：全站排名、评分、评分人数、日期、想看/看过/在看、ID；**网格 / 列表 / 表格三视图**，年代快捷筛选（近一年 / 各年代）映射到日期区间。
 - 已选筛选条件以 chips 展示、可单独移除；窄屏筛选走底部抽屉，工具条吸顶，按 `/` 快速聚焦搜索。
-- 条目页：本站索引的标签与占比、排名、评分分布；简介/角色/制作/关联/剧集由浏览器直连 Bangumi。
-- 管理后台：抓取概览、全量/增量/过期重爬、任务历史、索引管理、站长凭据、抓取出口诊断；tab 与数据页搜索状态写进 URL。
+- 条目页按来源分派：bgm 简介由浏览器直连（标签与占比、排名、评分分布来自索引）；扩展源简介/信息栏走服务端代理，评分分布只有 bgm 有，其余来源显示「暂无评分」。
+- 管理后台：抓取概览、全量/增量/过期重爬、**按源手动抓取与最近运行状态**、任务历史、索引管理、站长凭据、抓取出口诊断；tab 与数据页搜索状态写进 URL。
 - 返回不丢状态：浏览页结果与滚动位置按会话缓存，从条目页返回即时还原；前进导航自动回到页顶。
 - 用户登录：个人 Access Token，本机保存；登录框可切换**官方 / 镜像通道**并添加自定义镜像（令牌只发官方）。
 - 深浅色跟随系统、响应式布局（窄屏触控目标 ≥44px）、URL 即状态。
+
+## 数据源
+
+| 来源 | `source` | 是什么 | 抓取范围 | 节流 | 条目类型 |
+|---|---|---|---|---|---|
+| Bangumi | `bgm` | ACGN 社区条目库（原生索引） | 全类型全量枚举 + 增量 + 过期重爬（凭据见「用户登录与详情」） | `crawl_delay_ms` 默认 350ms | 1/2/3/4/6 |
+| TMDB | `tmdb` | The Movie Database v3（需 API key） | 电影/剧集热度榜各 20 页 ≈ 400 条/类；zh-CN 元数据 | 250ms | 101 电影 / 102 剧集 |
+| Apple TV（iTunes） | `itunes` | Apple iTunes 官方公开接口 | 台湾区电影榜单（实测约 100 条，见下方说明） | 3s/请求 | 101 电影 |
+| MyAnimeList | `mal` | **官方 v2 API**（凭 Client ID，`X-MAL-CLIENT-ID` 头） | `/anime/ranking` 榜单（单页上限 500，全量/增量各 1 页） | 750ms | 2 动画 |
+| AniList | `anilist` | AniList 官方公开 GraphQL | 热度榜前 10 页 ≈ 500 条（tags 按 rank≥20 过滤剧透） | 1.2s | 2 动画 |
+
+抓取方式：
+
+- 全源入口：管理后台「抓取设置」顶部的「启动抓取」卡一键启动全部启用来源（`full` / `incremental` / `refresh` 各对应一键），并显示上次全源抓取时间；卡片同区提供**全局默认保留期**。
+- 合并模式：`full` / `incremental` 先跑原生索引主流程，随后各扩展源串行抓取（源间间隔 2s，只抓设置里启用中的源、按有效优先级排序）；`refresh` 原生索引逐条重爬过期条目后，**只重抓条目已超过各自有效保留期的扩展源**。每个来源在任务历史里各占一行（含独立的状态/计数/错误）。
+- 单源抓取：管理后台「抓取设置」的来源卡片按源手动触发（`POST /api/admin/crawl` 带 `source`）；TMDB 未配置 key 时该源显示「未配置」、抓取跳过（记为「已跳过」），不影响其他来源。
+- **保留期（新鲜度）**：全局默认一处（抓取设置顶卡），每个源卡内可覆盖（0 = 用全局默认）；过期重爬与各源的新鲜度判定（含源卡上的过期条目计数）统一读「源覆盖值 ?? 全局默认」。
+- 扩展源不参与原生索引的全量清理；标签热度在每轮运行末尾统一重算。
+
+### 来源登记表（单一事实源）
+
+每个来源从注册到下线的全部可变语义只声明在 `internal/registry/registry.go` 一处：
+标识与中文徽标文案、是否原生索引、主行优先级、条目外链模板、类型编码→**原生标签**、
+类型编码→站点分类（kind）、站点分类中文标签、评分换算满分、详情获取策略（`proxy`=服务端代理 /
+`direct`=浏览器直连）、抓取节流与页数预算、**抓取模式能力清单**、凭据字段声明（如 TMDB 的 API Key）。
+matcher、crawler、server 与前端都不自带词表。
+
+**双层词表**：源原生层（各源自己的类型叫法，站点不改名——bgm 的类型 6 永远叫「三次元」）
+与站点分类层（kind：浏览筛选 chips / 首页类型卡 / 概览分类构成；动画/电影/剧集/书籍/音乐/游戏，
+想改类目名只动登记表一行）。详情页类型徽标与数据面板按行显示该行所在源的原生标签，
+站点级筛选与统计按 kind 层渲染（前端把 `by_type` 计数按登记表映射聚合到 kind）。
+
+- 后端经 `/api/meta` 的 `sources` 清单（原生 types 含 kind 映射 + 抓取模式能力）与
+  `kinds` 词表下发（只含设置里启用中的源，按有效优先级排序）；前端的来源徽标/分类 chips/
+  首页类型卡/抓取按钮组/详情页分派全部由它驱动（消费入口 `frontend/src/api/vocab.ts`），
+  清单之外的来源不渲染。
+- 匹配器的候选圈定 `(source, type) IN (登记表声明的同 kind 组合)`，且只在可跨源比对的
+  kind（动画/电影/剧集）内进行——书籍/音乐/游戏自成作品不查候选；主行优先级 =
+  登记表默认 + 管理设置覆写；年份窗口等阈值同样取自登记表。
+- 管理后台「抓取设置」是来源相关配置与操作的唯一去处：每源一张紧凑卡
+  （徽标 + 原生类型 + 最近运行 + 权重/排序/启用 + **该源自己的抓取按钮组**），
+  bgm 与扩展源同构——按钮组就是该源声明的模式（bgm：全量/增量/过期重爬；扩展源：
+  全量/增量收获；iTunes 这类无增量的源只有全量）。展开器（默认收起）里是各源自己的
+  配置：bgm 的抓取类型/参数/站长凭据，TMDB 的双鉴权凭据（v3 API Key 与 v4 读访问
+  令牌，有读令牌优先走 `Authorization: Bearer`）——凭据校验按钮也按登记表声明出现
+  （bgm 校验站长凭据、TMDB 请求 `/3/authentication` 验草稿值，其余源无校验器）。
+  **每源请求间隔**同样在展开器里调（0 = 登记表默认；下限按官方限速口径钳回：
+  bgm 350ms、TMDB 250ms、MyAnimeList 400ms/下限 350ms、AniList 1200ms/下限 700ms、
+  Apple TV 3000ms 贴住官方“约 20 次/分钟”），保存后立刷节流时间槽，无需重启。
+  出站代理也在此调整（保存后立即重建出站通道）。
+  凭据字段按登记表声明渲染，清单外拒绝；secretbox 加密存库。
+  停用的源不进 manifest、抓取自动跳过、浏览页 chips 消失（已入库条目保留）；
+  顺序调整后点「重新配对作品」即可对既有作品组重排主行；权重调整保存后自动异步重算合成评分。
+- 新增一个源的改动面：登记表加一行 + 适配器 + 测试，三处以内。
+
+### 作品合并（分组制）
+
+同一作品在各来源的行归为一组（`subjects.work_id` = 组内主行 id），**物理数据保留各源原样**；检索/计数一律塌缩到主行展示，重复卡不出现。主行按源优先级选取：**bgm > AniList > MyAnimeList > TMDB > Apple TV**（同级取 id 小）；更高优先级源加入既有组时（如 bgm 后来才抓到），整组 `work_id` 单条 UPDATE 重排。
+
+匹配器在写入路径上做三级匹配（拿不准就拒绝，**宁缺毋滥**）：
+
+1. `(source, source_ref)` 已存在 → 保持原组；
+2. 跨源确定性键：AniList 的 `idMal` 与 MyAnimeList 的 `mal_id` 相等 → 同作品（存 `ext_key` 列）；② 命中后还会跑一次 ③ 补充——排除已同意的组后若唯一命中其他组（如原生索引行），确定性+启发式双重同意即并入；
+3. 启发式：同类（可比对类别由登记表声明：动画={bgm 动画, mal, anilist}；电影={tmdb movie, itunes movie}；剧集={tmdb tv, bgm 三次元}）+ 年份 ±1 + 标题归一化后完全相等（NFKC + 小写 + 去空白标点；候选标题含 bgm name/name_cn、AniList 英文/罗马字/日文/同义词、MAL 英文/日文/同义词、TMDB 原名/译名）。**多个候选打平 → 不合并**，自成作品并记日志。
+
+- 同源行之间绝不互并（同源同名同年可能是不同作品）；bgm 全量清理删除组锚点时，作品组自动重指到最优扩展源行继续存活。
+- 来源筛选语义 =「该作品组内含此来源的记录」；来源 chips 与 `stats.by_source` 的计数为**覆盖作品数**（同作品多来源只计一次）。
+
+### 评分合成（各源权重加权）
+
+评分在两个口径上并存（迁移 0007 起）：
+
+- `raw_score` / `raw_rating_total`：每行**该来源自己的原始值**（10 分制归一后），任何后续写入都不改动它——详情页「各源评分」对比行展示的就是它，带各源官方外链；
+- 作品组主行的 `score` / `rating_total`：**按管理员配置的各源权重加权合成的组级值**，`Σ(w_i×s_i)/Σ(w_i)`（只计 raw_score>0 的源），评分人数取组内合计；检索排序与卡片大字评分直接走它（物化在主行上，查询走索引）。
+
+权重在管理后台「抓取设置」按源配置（0–100，0 = 该源评分不参与合成；默认全部 100，iTunes 无评分数据默认 0）。全量重算是一条 UPDATE 聚合语句，触发时机：抓取收尾、重新配对作品、**设置保存后（异步，不阻塞响应）**。评分分布环形图仍只认 bgm 分布（其余源无分布数据）。
+
+- 详情响应带 `sources` 数组（组内每源的原始评分与官方外链），详情页头部下方渲染多源评分对比行；主行缺简介时用组内其他来源的简介补（页面标注简介来源）。
+- 「重新配对作品」：管理后台「抓取设置」或 `POST /api/admin/works/rematch`——先完整回填存量行（anilist 每 50 id 一次批量请求取 `idMal` 与全部标题变体写回 `ext_key`/`alt_titles`；mal 行写入时自带 MAL id 键，无需回填），再对仍自成作品的扩展源行重新归组，并对全部多源组按当前有效优先级重排 + 全量重算合成评分；已并入多源组的行保持不动，可重复执行。
+
+来源实测备注（2026-11，决定当前采集形状的硬事实）：
+
+- **iTunes**：中国区（CN）电影榜单 RSS 返回空 feed、`lookup?country=CN` 恒 0 结果（CN 区不售卖电影）；`search` 对 movie/tvSeason 实体在全部地区均返回 0（Apple 已下线该类目搜索）；`top-tvseasons` 等剧集 feed 名已被 RSS 服务拒绝。因此本源取**台湾区**（zh-TW 元数据，华语可读）榜单 + `lookup&country=tw` 详情，**只收录电影**；RSS/lookup 均已不返回评分字段，本源 `score`/`rating_total` 恒 0。
+- **TMDB**：API Key 在管理后台「抓取设置」的 TMDB 卡片里填写（secretbox 加密存库，仅服务端使用，绝不暴露给浏览器）；未填写时浏览页不出现该来源。
+- **AniList**：无中文标题（name 取英文名，缺省罗马字）；评分取 `meanScore`（百分制 ÷10），评分人数取评分分布总和；标签带 rank/votes，rank≥20 且非剧透才入库。
+- **MyAnimeList**：官方 v2 API，凭 Client ID（管理后台「抓取设置」填写，secretbox 加密存库；未配置时该源整体跳过，浏览页不出现该来源）；无中文标题，synopsis 为英文。`source_ref` 即 MAL 条目 id，与 AniList 的 `idMal` 同一 ID 空间，确定性合并直接成立。
 
 ## 快速开始
 
@@ -103,7 +191,7 @@ ANIPICK_SECRET=改成长随机字符串
 POSTGRES_PASSWORD=改成数据库密码
 ```
 
-可选：`ANIPICK_BGM_TOKEN`（站长抓取凭据）、`ANIPICK_EGRESS_PROXY`（仅服务端抓取代理）、`ANIPICK_PORT`（默认 8787）。
+可选：`ANIPICK_PORT`（宿主机端口，默认 8787）。其余一切运行期配置（凭据、抓取参数、出站代理、DoH/ECH、真实 IP 识别）都在管理后台调整，不走环境变量。
 
 Compose 会读取 `.env` 做变量替换，但会**覆盖** `ANIPICK_DATABASE_URL` 为 `postgres://ani_pick:...@postgres:5432/ani_pick`；`.env` 里的 `127.0.0.1` 只用于裸机运行，容器内不要使用。
 
@@ -165,39 +253,41 @@ docker compose up -d
 | `ANIPICK_PORT` | `8787` | 宿主机端口 |
 | `ANIPICK_IMAGE` | `ghcr.io/meehua/ani-pick` | 镜像地址 |
 | `ANIPICK_IMAGE_TAG` | `latest` | 镜像标签 |
-| `ANIPICK_EGRESS_PROXY` | — | 仅服务端抓取代理，例如 `http://host.docker.internal:7890` |
 
-> 服务端抓取需要代理时，`extra_hosts` 已配置 `host.docker.internal:host-gateway`；访客请求不会经过服务端，也不受这个代理影响。
+> 服务端抓取需要代理时，在管理后台「抓取设置 → 网络」的出站代理里填（保存后立即重建出站通道）；`extra_hosts` 已配置 `host.docker.internal:host-gateway`；访客请求不会经过服务端，也不受这个代理影响。
 
 ## 工作原理
 
 ```
-站长 Bangumi 账号 ──► 抓取器（DoH + ECH 出站）──► PostgreSQL（本站索引）
-                                                      │
-访客浏览器 ──► /api/subjects（筛选/排序/分页）─────────┘
+站长 Bangumi 账号 ──┐
+TMDB / Apple TV /   ├─► 抓取器（DoH + ECH 出站，按源节流）──► PostgreSQL（本站索引）
+MyAnimeList / AniList ┘                                            │
+访客浏览器 ──► /api/subjects（筛选/排序/分页/来源）─────────────────┘
      │
-     └──► https://api.bgm.tv（详情；凭据只在本机 localStorage）
+     ├──► https://api.bgm.tv（bgm 详情；凭据只在本机 localStorage）
+     └──► /api/subjects/{id}/detail（扩展源详情，服务端代理 + 进程内缓存）
 ```
 
 ## 抓取与索引维护
 
 | 模式 | 行为 | 适用 |
 |---|---|---|
-| 全量 `full` | 逐类型按日期倒序枚举；成功且无跳页时清理本轮未覆盖的旧条目 | 首次建库、重建 |
-| 增量 `incremental` | 各类型最新 N 页 + 一批过期条目重爬 | 日常维护、自动调度 |
-| 过期重爬 `refresh` | `fetched_at` 超过 TTL 的条目，按排名优先 | 保持排名/标签占比不过期 |
+| 全量 `full` | bgm 逐类型按日期倒序枚举；成功且无跳页时清理本轮未覆盖的旧条目（只清 bgm）；随后各扩展源按预算抓取 | 首次建库、重建 |
+| 增量 `incremental` | **真增量**：bgm 按日期窗口拉各类型最新页 + 过期条目重爬；AniList 取「上次运行之后开播」窗口 + 人气榜保底页；TMDB 取「上次运行之后上映/开播」窗口（人气序）；MAL 取在播榜单（官方无日期发现端点）。**空数据（该源还没完成过增量，如首次安装/清空后）自动按全量预算补齐**，bgm 空类型也按全量跑到底——条目不能丢；已有条目的变更统一靠过期重爬（上游无变更流） | 日常维护、自动调度 |
+| 过期重爬 `refresh` | 原生索引：`fetched_at` 超过有效保留期的条目按排名优先；扩展源：只重抓有过期条目的源（保留期按源覆盖或全局默认） | 保持排名/标签占比不过期 |
 
 - 全量清理只在**本轮无跳页**时执行，避免半途失败删空索引。
 - 上游 404/403 标记 `locked` 并退避；连续失败 5 次后不再自动重试。
-- 自动调度每 2 分钟检查一次；抓取间隔、页大小、超时、UA 均可配置。
+- 自动调度每 2 分钟检查一次是否到期；自动增量与自动过期重爬各自支持三种触发形式（固定间隔 / 每日定点 / 每隔 N 天定点，定点按服务器本地时间），在「抓取设置 → 启动抓取」的自动任务区配置；检查周期可调（默认 2 分钟）。
+- 调度器与抓取的内部参数全部进后台设置（带默认推荐值与范围提示）：调度精度、页重试、请求重试/退避/429 封顶/响应上限/扩展源超时与 UA、源间间隔、标签上限、合并年份容差、配对分批、过期单条跳过阈值；服务器侧的会话缓存、压缩阈值、设置快照周期、性能样本上限、总览条数、停机等待、面板轮询间隔、返回缓存页数在「设置 → 服务器与面板」。每源收获预算（全量/增量页数、单页条数、标签门槛、商店地区）在各源卡展开区。
 - 重启会中断当前任务（记为 `interrupted`），重新启动即可，写入幂等。
 - 量级参考：动画约 3 万、书籍约 40 万；全量耗时与所选类型成正比。
 
 写入的字段（只存筛选所需）：
 
-- `subjects`：`id`（Bangumi 主键）、类型、名称、日期、平台、**全站排名**、评分、评分人数、收藏计数、敏感标记、分类标签、封面 URL、标签总票数、抓取时间、锁定/失败计数。
-- `subject_tags`：`(subject_id, tag_id, votes, pct)`；`pct` = 该标签票数 ÷ 该条目全部标签票数。
-- `tag_usage`：按类型的标签热度，供筛选候选。
+- `subjects`：`id`（bgm 用 Bangumi 主键；扩展源从 `subject_ext_id_seq` 分配，1e10 起与 bgm 空间隔离）、**`source`/`source_ref`**（来源标识与上游原始 id，`(source, source_ref)` 唯一）、类型、名称、日期、平台、全站排名（扩展源无排名概念，恒 0——「排名」排序建议配合来源筛选使用）、评分（扩展源已归一 10 分制）、评分人数、收藏计数、敏感标记、分类标签（bgm 专属，扩展源为空）、封面 URL、标签总票数、抓取时间、锁定/失败计数。
+- `subject_tags`：`(subject_id, tag_id, votes, pct)`；`pct` = 该标签票数 ÷ 该条目全部标签票数。扩展源标签无票数概念，`votes`/`pct` 恒 0（占比门槛筛选对它们不生效，名字筛选照常可用），每条目截断 ≤8 个。
+- `tag_usage`：按类型的标签热度（跨来源按类型聚合），供筛选候选；`meta_tag_usage` 只聚合 bgm 原生类型（type<100）。
 
 ## 用户登录与详情
 
@@ -245,41 +335,44 @@ docker compose up -d
 
 支持 `.env` 与真实环境变量，环境变量优先。完整示例见 [`.env.example`](.env.example)。
 
+**运行期配置一律在管理后台调整，不走环境变量**：数据源启用/顺序/评分权重/每源请求间隔/凭据/抓取参数在「抓取设置」，出站代理与 DoH/ECH 在「抓取设置 → 网络」，真实 IP 识别在「设置 → 限流与安全」。环境变量只承担引导期必需项与基础设施规格两类；非法的时长值会**启动即报错**（fail fast），不静默回落。
+
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `ANIPICK_ADDR` | `:8787` | 监听地址 |
 | `ANIPICK_DATABASE_URL` | `postgres://ani_pick:ani_pick@127.0.0.1:5432/ani_pick?sslmode=disable` | PostgreSQL |
 | `ANIPICK_ADMIN_PASSWORD` | `anipick` | 首次启动写入数据库的管理员密码 |
-| `ANIPICK_SECRET` | — | 加密数据库内抓取凭据（AES-GCM） |
-| `ANIPICK_BGM_TOKEN` / `ANIPICK_BGM_COOKIE` | — | 站长抓取凭据（首次启动种子值） |
-| `ANIPICK_DOH` / `ANIPICK_ECH` | `true` | 服务端抓取的 DoH / ECH（与前台无关） |
-| `ANIPICK_DOH_ENDPOINTS` | `https://dns.alidns.com/resolve,https://1.1.1.1/dns-query` | DoH 入口（国内优先 AliDNS） |
-| `ANIPICK_EGRESS_PROXY` | — | **仅服务端抓取**的出站代理（http/https/socks5）；用户请求永不经过服务端 |
-| `ANIPICK_CLIENT_IP_HEADER` | — | 客户端真实 IP 请求头（如 Cloudflare 的 `CF-Connecting-IP`）；仅当 TCP 对端属于 `ANIPICK_TRUSTED_PROXY_CIDRS` 时才采信，防止伪造头绕过限流 |
-| `ANIPICK_TRUSTED_PROXY_CIDRS` | — | 可信反代网段（逗号分隔 CIDR，Cloudflare 见 [cloudflare.com/ips](https://www.cloudflare.com/ips/)）；与 `ANIPICK_CLIENT_IP_HEADER` 配套使用 |
+| `ANIPICK_SECRET` | — | 加密数据库内抓取凭据（NaCl secretbox） |
+| `ANIPICK_DEBUG` | `false` | 调试日志 |
 | `ANIPICK_DB_MAX_CONNS` / `ANIPICK_DB_MIN_CONNS` | `12` / `2` | 连接池规格，默认按 1GB 内存机校准；换大机器按内存提高（每个连接对应一个 PG 后端进程） |
-| `ANIPICK_CRAWL_TYPES` | `1,2,3,4,6` | 抓取类型 |
-| `ANIPICK_CRAWL_PAGE_SIZE` | `100` | 每页条数（10–100） |
-| `ANIPICK_CRAWL_DELAY_MS` | `350` | 请求间隔 |
-| `ANIPICK_REFRESH_TTL_DAYS` | `30` | 过期天数 |
-| `ANIPICK_REFRESH_BATCH` | `300` | 单次重爬上限 |
-| `ANIPICK_INCREMENTAL_PAGES` | `10` | 增量每类型页数 |
-| `ANIPICK_INCREMENTAL_INTERVAL_MIN` | `360` | 自动增量间隔 |
-| `ANIPICK_AUTO_INCREMENTAL` / `ANIPICK_AUTO_REFRESH` | `true` | 自动调度 |
-| `ANIPICK_PRUNE_ON_FULL` | `true` | 全量后清理旧数据 |
+| `ANIPICK_DB_CONN_LIFETIME` | `1h` | 连接最长存活时间；防反代侧断连后拿到死连接 |
+| `ANIPICK_DB_CONN_IDLE_TIME` | `0` | 连接空闲回收时间；`0` = 不按空闲回收 |
+| `ANIPICK_DB_HEALTH_CHECK_PERIOD` | `30s` | 空闲连接健康检查周期 |
+| `ANIPICK_HTTP_READ_HEADER_TIMEOUT` | `10s` | 读请求头超时（Slowloris 防护） |
+| `ANIPICK_HTTP_READ_TIMEOUT` | `30s` | 读整个请求超时 |
+| `ANIPICK_HTTP_WRITE_TIMEOUT` | `120s` | 写响应超时 |
+| `ANIPICK_HTTP_IDLE_TIMEOUT` | `90s` | 空闲连接保活时长 |
+
+duration 值用 Go 格式（`90s` / `2m` / `1h`）。
+
+### 升级提示（1.0.x → 当前）
+
+- `.env` 里配过 `ANIPICK_BGM_TOKEN` / `ANIPICK_BGM_COOKIE` 的：这两项**已删除**（不再作为首次启动种子）。升级后请在管理后台「抓取设置」的 bgm 卡片里重填一次站长凭据（secretbox 加密存库）。
+- `.env` 里的 `ANIPICK_CRAWL_*` / `ANIPICK_REFRESH_*` / `ANIPICK_INCREMENTAL_*` / `ANIPICK_AUTO_*` / `ANIPICK_PRUNE_ON_FULL` / `ANIPICK_BGM_TIMEOUT_SEC` / `ANIPICK_DOH*` / `ANIPICK_ECH` / `ANIPICK_EGRESS_PROXY` / `ANIPICK_CLIENT_IP_HEADER` / `ANIPICK_TRUSTED_PROXY_CIDRS` 全部删除：对应配置分别迁入「抓取设置」与「设置 → 限流与安全」。数据库里已保存的设置原样保留，缺失项用内置默认值补齐，此后以管理后台为准。
 
 ## API
 
 | 端点 | 说明 |
 |---|---|
-| `GET /api/subjects` | 本站索引检索（参数见 README 上文） |
+| `GET /api/subjects` | 本站索引检索（参数见 README 上文；`source` 过滤来源） |
 | `GET /api/subjects/{id}` | 本站索引详情 |
+| `GET /api/subjects/{id}/detail` | 扩展源详情代理（tmdb/itunes/mal/anilist；bgm 条目返回 400） |
 | `GET /api/tags` / `GET /api/meta-tags` | 筛选候选 |
 | `GET /api/meta` | 站点统计 / 抓取状态 |
 | `POST /api/admin/login` | 管理员登录（HttpOnly 会话） |
 | `GET /api/admin/overview` | 统计 / 抓取状态 / 最近任务 |
 | `GET/PUT /api/admin/settings` | 设置（敏感值脱敏） |
-| `POST /api/admin/crawl` | 启动抓取 `full` / `incremental` / `refresh` |
+| `POST /api/admin/crawl` | 启动抓取 `full` / `incremental` / `refresh`；带 `source` 时按单源执行（模式须在该源的登记表能力内：原生索引 `full`/`incremental`/`refresh`，扩展源 `harvest`/`harvest_incremental`） |
 | `POST /api/admin/crawl/cancel` | 停止任务 |
 | `GET /api/admin/runs` | 任务历史 |
 | `GET /api/admin/subjects` | 索引管理检索 |
@@ -322,15 +415,16 @@ TTL 语义：**填 0 = 关闭该层缓存**（每次都实查/响应退回 `no-s
 ## 目录结构
 
 ```
-main.go                 装配配置 / 数据库 / 抓取器 / HTTP 服务
+main.go                 装配配置 / 数据库 / 抓取器 / 数据源适配器 / HTTP 服务
 internal/config         .env + 环境变量
 internal/db             连接与内嵌 SQL 迁移
-internal/store          索引、标签、设置、会话、任务
+internal/store          索引、标签、设置、会话、任务（身份读写收口在 UpsertSubjects）
 internal/bgm            Bangumi 客户端（仅服务端抓取）
+internal/sources        扩展数据源适配器（tmdb/itunes/mal/anilist：抓取 + 详情归一化）
 internal/netx           DoH 解析 + ECH（仅服务端出站）
-internal/crawler        全量 / 增量 / 过期重爬 / 调度
-internal/server         路由、管理会话、静态托管
-internal/secretbox      设置项 AES-GCM（可选）
+internal/crawler        全量 / 增量 / 过期重爬 / 数据源抓取 / 调度
+internal/server         路由、管理会话、静态托管、扩展源详情代理
+internal/secretbox      设置项加密（NaCl secretbox，可选）
 frontend/               Vite + React 19 + shadcn/ui
   src/net/endpoints.ts  官方 / 镜像通道、用户自定义镜像（本机）
 scripts/                build / dev / smoke
@@ -383,18 +477,25 @@ GHCR 首次推送的 package 可能是私有；需要在 GitHub Package 设置�
 ## 测试
 
 ```bash
-go test ./...                 # 配置 / 服务端 DoH 与 ECH / 抓取转换 / SPA
+go test ./...                 # 配置 / 服务端 DoH 与 ECH / 抓取转换 / SPA / 数据源适配器
 bash scripts/smoke.sh         # 运行中服务的 API 冒烟（含“无中继”断言）
 cd frontend && node e2e.mjs   # Playwright：筛选、标签、详情、镜像通道、令牌隔离、后台、主题
 cd frontend && node probe.mjs # 侧栏复杂控件探针
+```
+
+数据库集成测试（upsert 身份含 id 序列、source 过滤、Prune 来源隔离、迁移幂等）在共享库的
+独立 schema 上运行、不触碰线上数据，默认跳过；提供 `ANIPICK_TEST_DSN` 后启用：
+
+```bash
+ANIPICK_TEST_DSN='postgres://ani_pick:ani_pick@127.0.0.1:5432/ani_pick?sslmode=disable' go test ./internal/store/
 ```
 
 ## 公开部署与合规
 
 本站按**公开站点**运营，请注意：
 
-1. **管理员入口**：页面不暴露任何管理入口链接（直接访问 `/admin`）；首次登录后修改密码；用反向代理 / IP 白名单限制 `/admin` 与 `/api/admin/*`；不要使用默认密码。经 Cloudflare 等反代暴露时，配置 `ANIPICK_CLIENT_IP_HEADER` + `ANIPICK_TRUSTED_PROXY_CIDRS`（如 `CF-Connecting-IP` + Cloudflare 网段），让限流按真实访客 IP 计数且不可伪造。
-2. **数据范围**：本站索引只保存检索所需的条目事实字段（ID、名称、日期、排名、评分、标签与占比），不存储简介、剧集、角色等完整内容；这些由访客浏览器实时从 Bangumi 获取。
+1. **管理员入口**：页面不暴露任何管理入口链接（直接访问 `/admin`）；首次登录后修改密码；用反向代理 / IP 白名单限制 `/admin` 与 `/api/admin/*`；不要使用默认密码。经 Cloudflare 等反代暴露时，在管理后台「设置 → 限流与安全」配置真实 IP 请求头与可信网段（如 `CF-Connecting-IP` + Cloudflare 网段），让限流按真实访客 IP 计数且不可伪造。
+2. **数据范围**：本站索引只保存检索所需的条目事实字段（ID、来源、名称、日期、排名、评分、标签与占比），不存储简介、剧集、角色等完整内容；bgm 的这些内容由访客浏览器实时从 Bangumi 获取，扩展源的简介经服务端代理端点按需获取并缓存（不落库）。
 3. **图片**：直接由访客浏览器从 Bangumi 图床加载，不经本站转发；页面设置 `referrerpolicy="no-referrer"`。
 4. **版权与条款**：条目与图片版权归 Bangumi 及原作者；请遵守 Bangumi 的 API 使用条款，保持可描述的 User-Agent 与合理抓取频率。
 5. **敏感内容**：默认不展示；界面使用中性措辞；索引不保存任何露骨内容。
@@ -407,3 +508,7 @@ cd frontend && node probe.mjs # 侧栏复杂控件探针
 - 官方域名不可达时，未配置代理的访客**无法登录/查看鉴权内容**；镜像只提供公开数据。
 - 镜像可用性、速度、数据完整性由第三方决定；内置镜像可能失效，可在登录框更换或自建。
 - 全量抓取大类型（如书籍）耗时较长；可按类型分步执行。
+- **混源排序语义**：「全站排名」是 bgm 专属概念（扩展源 rank 恒 0，排在有排名条目之后）；对扩展源条目排序请配合来源筛选（`?source=tmdb`）使用，混源排名列不具可比性。
+- **扩展源评分分布**：评分分布（1-10 分档）只有 bgm 有；TMDB/Apple TV/MyAnimeList/AniList 详情页评分显示数值但扇形图退化为「暂无评分」。
+- **MyAnimeList 可达性**：`api.myanimelist.net` 走 CloudFront，多数环境可直连；被阻断时抓取失败记录报错，可在管理后台「抓取设置 → 网络」的出站代理里配置代理，保存后立即换新出站通道。
+- **扩展源条目量级**：各扩展源只抓取热门榜单（约数百条），不是全量镜像；Apple TV 源受 Apple 官方接口限制只收录台湾区电影榜单（约 100 条、无评分数据），剧集暂无官方发现通道。

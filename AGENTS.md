@@ -21,6 +21,11 @@
   （`git rev-parse --abbrev-ref HEAD`）；`main` 只用于发版（`v*` tag），在 `main`
   上完成发版操作后必须切回 `dev`。任何时刻 `main` 都必须可构建可发布。
   不对远端 `main` 强制推送；确需改写远端历史时交给站主自己执行 `--force-with-lease`。
+- **作品分组**：多源条目以 `subjects.work_id` 分组（= 组内主行 id，主行优先级
+  与各源权重在管理后台「设置」按源配置，登记表默认序 anilist > mal > tmdb >
+  itunes，bgm 排在首位）；检索塌缩到主行，匹配收口在
+  `store/workmatch.go`（三级匹配、同源不互并、歧义拒绝），正文见 README
+  「作品合并（分组制）」。
 
 ## 性能红线（接手改动必须对照）
 

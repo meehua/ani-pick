@@ -47,25 +47,9 @@ services:
       ANIPICK_DATABASE_URL: "postgres://ani_pick:${POSTGRES_PASSWORD:-ani_pick}@postgres:5432/ani_pick?sslmode=disable"
       ANIPICK_ADMIN_PASSWORD: "${ANIPICK_ADMIN_PASSWORD:-anipick}"
       ANIPICK_SECRET: "${ANIPICK_SECRET:-}"
-      ANIPICK_BGM_TOKEN: "${ANIPICK_BGM_TOKEN:-}"
-      ANIPICK_BGM_COOKIE: "${ANIPICK_BGM_COOKIE:-}"
-      ANIPICK_BGM_UA: "${ANIPICK_BGM_UA:-AniPick/1.0 (+https://github.com/bangumi; local indexer)}"
-      ANIPICK_DOH: "${ANIPICK_DOH:-true}"
-      ANIPICK_ECH: "${ANIPICK_ECH:-true}"
-      ANIPICK_DOH_ENDPOINTS: "${ANIPICK_DOH_ENDPOINTS:-https://dns.alidns.com/resolve,https://1.1.1.1/dns-query}"
-      ANIPICK_EGRESS_PROXY: "${ANIPICK_EGRESS_PROXY:-}"
-      ANIPICK_CRAWL_TYPES: "${ANIPICK_CRAWL_TYPES:-1,2,3,4,6}"
-      ANIPICK_CRAWL_PAGE_SIZE: "${ANIPICK_CRAWL_PAGE_SIZE:-100}"
-      ANIPICK_CRAWL_DELAY_MS: "${ANIPICK_CRAWL_DELAY_MS:-350}"
-      ANIPICK_BGM_TIMEOUT_SEC: "${ANIPICK_BGM_TIMEOUT_SEC:-40}"
-      ANIPICK_REFRESH_TTL_DAYS: "${ANIPICK_REFRESH_TTL_DAYS:-30}"
-      ANIPICK_REFRESH_BATCH: "${ANIPICK_REFRESH_BATCH:-300}"
-      ANIPICK_INCREMENTAL_PAGES: "${ANIPICK_INCREMENTAL_PAGES:-10}"
-      ANIPICK_INCREMENTAL_INTERVAL_MIN: "${ANIPICK_INCREMENTAL_INTERVAL_MIN:-360}"
-      ANIPICK_AUTO_INCREMENTAL: "${ANIPICK_AUTO_INCREMENTAL:-true}"
-      ANIPICK_AUTO_REFRESH: "${ANIPICK_AUTO_REFRESH:-true}"
-      ANIPICK_PRUNE_ON_FULL: "${ANIPICK_PRUNE_ON_FULL:-true}"
       ANIPICK_DEBUG: "${ANIPICK_DEBUG:-false}"
+      # 运行期业务配置（数据源/凭据/抓取参数/出站网络/真实 IP）全部在管理后台调整，
+      # 不经环境变量；基础设施规格（连接池/HTTP 超时）按需在 .env 里覆写默认值。
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stop_grace_period: 20s
